@@ -1,21 +1,45 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
+# T5.4 — release shrinking rules.
 #
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# Everything kept here is kept for a reason that is written down. A -keep with no
+# stated cause is how a shrink configuration rots into "keep everything".
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# Stack traces still have to be readable. There is no crash reporter to upload them
+# to (F5.4), but a logcat trace from the user's own device is the only debugging
+# signal this app will ever produce, so the line table is worth its few KB.
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# ---- SQLCipher (T3.1) -------------------------------------------------------
+# libsqlcipher.so resolves its Java counterparts by name through JNI, so R8 cannot
+# see the references. Renaming or removing any of this fails at runtime with
+# UnsatisfiedLinkError on the first database open — that is, at unlock, after
+# biometric auth, with the ledger inaccessible.
+-keep class net.zetetic.database.** { *; }
+-keep interface net.zetetic.database.** { *; }
+-keepclasseswithmembernames class * {
+    native <methods>;
+}
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# ---- Room (T3.1 / T3.4) -----------------------------------------------------
+# Room looks up its generated implementation by constructing the class name from
+# the abstract database class: AppDatabase -> AppDatabase_Impl. That is reflection
+# by string, invisible to the shrinker.
+-keep class * extends androidx.room.RoomDatabase { <init>(); }
+-keep class **_Impl { <init>(...); }
+
+# Migrations are instantiated as anonymous subclasses and only ever reached through
+# RoomDatabase.Builder, so nothing statically references them.
+-keep class * extends androidx.room.migration.Migration { *; }
+
+-dontwarn androidx.room.paging.**
+
+# ---- androidx.sqlite --------------------------------------------------------
+-keep class androidx.sqlite.db.** { *; }
+
+# ---- Kotlin -----------------------------------------------------------------
+# Coroutines' internal ServiceLoader wiring; the standard AGP consumer rules cover
+# most of it, these two silence what is left.
+-dontwarn kotlinx.coroutines.**
+-keepclassmembers class kotlinx.coroutines.** {
+    volatile <fields>;
+}

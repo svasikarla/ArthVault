@@ -20,6 +20,11 @@ local.properties
 debug.keystore
 *.jks
 
+# T2.2 — the private half of the parser-rule signing key. The public half ships in
+# res/raw and is meant to be public; this one signs what the app will trust, so it
+# never enters the repository. Regenerate with tools/GenParserRuleKey.java.
+parser-rules-private-key.pem
+
 # User financial data. An encrypted backup or a pulled database must never be
 # committed — the passphrase protects the contents, but the file is still the
 # user's complete ledger.

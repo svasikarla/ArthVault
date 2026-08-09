@@ -6,11 +6,15 @@ plugins {
 }
 
 android {
-  namespace = "com.example"
+  namespace = "com.arthvault"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.aistudio.vaultledger.pfxq"
+    // Changed from the generated "com.aistudio.vaultledger.pfxq" before first real
+    // use. An applicationId is permanent in practice: Android treats a change as a
+    // different app, so anyone with the old build installed must uninstall it, and
+    // the encrypted ledger on that device goes with it. That cost only ever grows.
+    applicationId = "com.arthvault.ledger"
     minSdk = 26
     targetSdk = 36
     versionCode = 1
@@ -20,25 +24,18 @@ android {
 
   }
 
-  signingConfigs {
-    create("release") {
-      // Falls back to the debug keystore when no upload key is configured, so
-      // `assembleRelease` works on a fresh clone. A release built this way is
-      // measurable and installable but obviously not publishable — the real key
-      // comes from the environment on the machine that actually ships it.
-      val configuredKeystore = System.getenv("KEYSTORE_PATH")?.let { file(it) }
-        ?: file("${rootDir}/my-upload-key.jks").takeIf { it.exists() }
+  // The upload key, if this machine has one. `null` is a meaningful value here:
+  // it means the release APK goes out unsigned.
+  val uploadKeystore = System.getenv("KEYSTORE_PATH")?.let { file(it) }
+    ?: file("${rootDir}/my-upload-key.jks").takeIf { it.exists() }
 
-      if (configuredKeystore != null) {
-        storeFile = configuredKeystore
+  signingConfigs {
+    if (uploadKeystore != null) {
+      create("release") {
+        storeFile = uploadKeystore
         storePassword = System.getenv("STORE_PASSWORD")
         keyAlias = "upload"
         keyPassword = System.getenv("KEY_PASSWORD")
-      } else {
-        storeFile = file("${rootDir}/debug.keystore")
-        storePassword = "android"
-        keyAlias = "androiddebugkey"
-        keyPassword = "android"
       }
     }
     create("debugConfig") {
@@ -52,9 +49,32 @@ android {
   buildTypes {
     release {
       isCrunchPngs = false
-      isMinifyEnabled = false
+      // T5.4 — see proguard-rules.pro. Every -keep in there is load-bearing:
+      // SQLCipher resolves its Java side by name over JNI, and Room reaches its
+      // generated *_Impl the same way. Both failures would surface at unlock,
+      // not at build time, which is why the rules file explains each one.
+      isMinifyEnabled = true
+      isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      signingConfig = signingConfigs.getByName("release")
+
+      // No upload key means no signature — not the debug signature.
+      //
+      // This used to fall back to debug.keystore so that `assembleRelease` always
+      // produced an installable APK. That is the wrong kind of convenient: the debug
+      // key is checked into this repository and its password is the string
+      // "android", so a release signed with it can be replaced by an update from
+      // anyone who has cloned the project. The failure was also silent — the APK
+      // installed and ran, and nothing distinguished it from a properly signed one.
+      //
+      // Unsigned fails at install time instead, which is loud, harmless, and
+      // impossible to ship by accident. Size and shrink measurement still work.
+      signingConfig = signingConfigs.findByName("release")
+      if (signingConfig == null) {
+        logger.warn(
+          "arth-vault: no upload key (set KEYSTORE_PATH, or drop my-upload-key.jks " +
+            "in the project root) — the release APK will be UNSIGNED and will not install."
+        )
+      }
 
       // T5.4 — libsqlcipher.so is 5.5 MB on arm64 and 3.8 MB on armeabi-v7a
       // because SQLCipher statically links OpenSSL's libcrypto. Carrying the

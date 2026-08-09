@@ -57,11 +57,41 @@ Two files are needed locally and are deliberately not committed:
       -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
   ```
 
+A release build needs an upload key, supplied via `KEYSTORE_PATH` (plus
+`STORE_PASSWORD` / `KEY_PASSWORD`) or as `my-upload-key.jks` in the project root.
+Without one `assembleRelease` still runs — useful for measuring size — but emits
+`app-release-unsigned.apk`, which will not install. That is deliberate: signing a
+release with the `debug.keystore` in this repository would let anyone who cloned the
+project push an update over it.
+
 ## Tests
 
 ```bash
 ./gradlew :app:test
 ```
+
+## Parser rules
+
+The parser has no patterns compiled into it. Every rule lives in
+`app/src/main/assets/parser_rules_v1.json`, signed with ECDSA-P256 and verified at
+runtime against a public key in `res/raw` — offline, so the zero-egress guarantee is
+untouched. The app installs them on each unlock if the file's `rulesVersion` is newer
+than what is already applied, and a file that fails verification changes nothing.
+
+After editing the rules, re-sign them or the build will fail:
+
+```bash
+ARTH_SIGN_RULES=1 ./gradlew :app:testDebugUnitTest --tests "*ParserRuleAssetTest*"
+```
+
+This needs `parser-rules-private-key.pem` in the project root; generate one with
+`java tools/GenParserRuleKey.java`. The private key is gitignored and never ships.
+
+`ParserAccuracyTest` scores the parser against
+`app/src/test/resources/sms_corpus.jsonl` — 205 bank messages across every
+allowlisted sender — field by field, and fails the build below 95% (T2.4). It
+currently measures **0.9993**. When you find a message the parser reads wrong, add
+it to the corpus before fixing the regex.
 
 ## Permissions
 

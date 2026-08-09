@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "rulesVersion": 1,
+  "issuedAt": "2026-08-10T00:00:00Z",
+  "signature": "MEYCIQCssX63bJLWMmydFYhG56En5wh0B1rNOsYPAlnV0i26zwIhAKZcZWF+CfoXySKqDjmuh5ssBOjZqcwqSO5TIXaNgNwM",
+  "rules": [
+    {
+      "ruleId": "builtin.bank-account-date-payee",
+      "description": "Rs.420.00 debited from HDFC Bank A/c xx8901 on 05-08-25 to VPA swiggy@ybl. The commonest Indian layout: the bank names itself between the verb and the account, and the value date sits between the account and the payee. Slots for both are what stop the merchant capture ending at the date and leaving the bank's own name as the payee. The payee clause is mandatory here, unlike the account-first rule below, because this rule exists to find a named payee and a message without one should fall through.",
+      "senderPattern": ".*",
+      "regexPattern": "(?i)(?:Rs\\.?|INR|₹|Re\\.?)\\s*([0-9,]+(?:\\.[0-9]{1,2})?)\\s*(?:has been|is|was)?\\s*(?:refund|cashback|amount|payment|txn|transaction)?\\s*\\b(debited|credited|spent|paid|sent|withdrawn|refunded|charged|transferred|deposited|deducted|added)\\b\\s*(?:\\b(?:from|to|at|in|by)\\b\\s*)?(?:[A-Za-z][A-Za-z.]*\\s+){0,4}?(?:[A-Za-z]{0,10}card|a/c|acct|account)\\s*(?:xx+|x|[*]+)?\\s*([0-9]{3,6})\\s*(?:on\\s+\\d{1,2}[-/][A-Za-z0-9]{2,}(?:[-/]\\d{2,4})?\\s*)?\\b(?:to|at|for|towards|from|by)\\b\\s*(?:vpa\\s+)?([A-Za-z0-9.@_&'/-][A-Za-z0-9\\s.@_&'/-]*?)(?=\\s+on\\b|\\s+ref\\b|\\s+bal\\b|\\s+avl\\b|\\s+avail\\b|\\s+via\\b|\\s+using\\b|[.,]|$|\\n)",
+      "amountGroup": 1,
+      "directionGroup": 2,
+      "merchantGroup": 4,
+      "accountGroup": null,
+      "channelGroup": null,
+      "priority": 10,
+      "isActive": true
+    },
+    {
+      "ruleId": "builtin.amount-verb-payee",
+      "description": "Rs. 450.00 debited from A/C XX1234 to SWIGGY on 08-Aug-26. The optional noun slot before the verb matters: 'Rs 1,299 refund credited to ...' puts a noun between the amount and the direction word, and without it the message was filed unparsed.",
+      "senderPattern": ".*",
+      "regexPattern": "(?i)(?:Rs\\.?|INR|₹|Re\\.?)\\s*([0-9,]+(?:\\.[0-9]{1,2})?)\\s*(?:has been|is|was)?\\s*(?:refund|cashback|amount|payment|txn|transaction)?\\s*(debited|spent|paid|sent|credited|received|withdrawn|refunded|charged|transferred|deposited|deducted)\\s*(?:from|to|at|via|in|by|for)?\\s*(?:A/C|a/c|acct|account|card)?\\s*(?:xx|[*]+)?([0-9]{3,4})?\\s*(?:to|at|for|vpa|by|from)?\\s*([A-Za-z0-9\\s.@_&'/-]+?)(?=\\s+on|\\s+ref|\\s+Bal|\\s+avail|\\.|\\,|$|\\n)",
+      "amountGroup": 1,
+      "directionGroup": 2,
+      "merchantGroup": 4,
+      "accountGroup": null,
+      "channelGroup": null,
+      "priority": 20,
+      "isActive": true
+    },
+    {
+      "ruleId": "builtin.verb-first",
+      "description": "Paid Rs 1200 to Starbucks via UPI on ... The verb leads and the amount follows it.",
+      "senderPattern": ".*",
+      "regexPattern": "(?i)(Paid|Spent|Received|Sent|Charged|Debited|Credited|Transferred)\\s*(?:Rs\\.?|INR|₹|Re\\.?)?\\s*([0-9,]+(?:\\.[0-9]{1,2})?)\\s*(?:to|at|from|for|on)\\s*([A-Za-z0-9\\s.@_&'/-]+?)(?=\\s+via|\\s+using|\\s+on|\\s+ref|\\s+Bal|\\.|\\,|$|\\n)",
+      "amountGroup": 2,
+      "directionGroup": 1,
+      "merchantGroup": 3,
+      "accountGroup": null,
+      "channelGroup": null,
+      "priority": 30,
+      "isActive": true
+    },
+    {
+      "ruleId": "builtin.card-purchase",
+      "description": "Spent Rs.2,499.00 on HDFC Bank Card ending 5678 at AMAZON INDIA. The merchant is whatever follows 'at'; everything before it is card boilerplate.",
+      "senderPattern": ".*",
+      "regexPattern": "(?i)(Spent|Charged|Debited|Paid)\\s*(?:Rs\\.?|INR|₹|Re\\.?)\\s*([0-9,]+(?:\\.[0-9]{1,2})?)\\s*(?:on|with)?\\s*([A-Za-z0-9\\s]+)?\\s*(?:ending|card)?\\s*([0-9]{3,4})?\\s*at\\s*([A-Za-z0-9\\s.@_&'/-]+?)(?=\\s+on|\\.|\\,|$|\\n)",
+      "amountGroup": 2,
+      "directionGroup": 1,
+      "merchantGroup": 5,
+      "accountGroup": null,
+      "channelGroup": null,
+      "priority": 40,
+      "isActive": true
+    },
+    {
+      "ruleId": "builtin.account-first",
+      "description": "A/C 4321 debited with INR 350.00 for SWIGGY. The merchant clause requires its introducing preposition: without it the lazy group started wherever the amount ended, so ICICI's two-leg transfer alert yielded a merchant of 'on 09-Aug-26 & Acct XX066 credited'. A message naming no merchant should produce no merchant, not the rest of itself.",
+      "senderPattern": ".*",
+      "regexPattern": "(?i)(?:A/C|A/c|acct|account|card)\\s*(?:xx+|x|[*]+)?([0-9]{3,4})?\\s*(?:is|has been|was)?\\s*(debited|credited|charged|spent|transferred)\\s*(?:with|for|by)?\\s*(?:Rs\\.?|INR|₹|Re\\.?)\\s*([0-9,]+(?:\\.[0-9]{1,2})?)(?:\\s*on\\s+\\d{1,2}[-/][A-Za-z0-9]{2,}(?:[-/]\\d{2,4})?)?(?:\\s*(?:for|at|to|towards|by)\\s*([A-Za-z0-9\\s.@_&'/-]+?)(?=\\s+on|\\.|\\,|$|\\n))?",
+      "amountGroup": 3,
+      "directionGroup": 2,
+      "merchantGroup": 4,
+      "accountGroup": null,
+      "channelGroup": null,
+      "priority": 50,
+      "isActive": true
+    },
+    {
+      "ruleId": "builtin.loose-amount-payee",
+      "description": "Txn of Rs 350.00 done on A/C XX8901 at SWIGGY. The last resort: no direction group at all, so the direction is read from the body. Runs last because it matches loosely.",
+      "senderPattern": ".*",
+      "regexPattern": "(?i)(?:Txn|Transaction|Alert|Spent|Charged)?\\s*(?:of)?\\s*(?:Rs\\.?|INR|₹|Re\\.?)\\s*([0-9,]+(?:\\.[0-9]{1,2})?)\\s*(?:done|spent|debited|credited|paid)?\\s*(?:on|at|from|to|for)\\s*([A-Za-z0-9\\s.@_&'/-]+?)(?=\\s+on|\\s+ref|\\s+Bal|\\.|\\,|$|\\n)",
+      "amountGroup": 1,
+      "directionGroup": null,
+      "merchantGroup": 2,
+      "accountGroup": null,
+      "channelGroup": null,
+      "priority": 60,
+      "isActive": true
+    }
+  ]
+}
