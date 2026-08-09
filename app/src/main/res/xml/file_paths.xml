@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!--
+      Only the export directory is shareable. SmsRepository writes exports into
+      cacheDir/exports, so a granted share URI can never reach the ledger database.
+    -->
+    <cache-path
+        name="ledger_exports"
+        path="exports/" />
+</paths>

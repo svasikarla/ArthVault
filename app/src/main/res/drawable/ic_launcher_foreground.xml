@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Outer Vault Security Shield -->
+    <path
+        android:fillColor="#10B981"
+        android:pathData="M54,18 L26,30 V52 C26,72 38,84 54,90 C70,84 82,72 82,52 V30 Z" />
+    <!-- Inner Dark Vault Core -->
+    <path
+        android:fillColor="#0F172A"
+        android:pathData="M54,26 L32,35 V52 C32,66 41,76 54,81 C67,76 76,66 76,52 V35 Z" />
+    <!-- Indian Rupee (₹) Golden Vault Emblem -->
+    <!-- Top Horizontal Bar -->
+    <path
+        android:fillColor="#F59E0B"
+        android:pathData="M42,40 H66 V44 H42 Z" />
+    <!-- Second Horizontal Bar -->
+    <path
+        android:fillColor="#F59E0B"
+        android:pathData="M42,47 H63 V51 H42 Z" />
+    <!-- Main Rupee Curve & Vertical Stem -->
+    <path
+        android:fillColor="#F59E0B"
+        android:pathData="M46,40 H50 V66 H46 Z" />
+    <!-- Rupee Loop Curve -->
+    <path
+        android:fillColor="#F59E0B"
+        android:pathData="M50,47 C58,47 62,50 62,55 C62,60 57,63 50,63 V59 C55,59 58,57 58,55 C58,52 55,51 50,51 Z" />
+    <!-- Rupee Diagonal Leg -->
+    <path
+        android:fillColor="#F59E0B"
+        android:pathData="M50,58 L62,70 H68 L55,57 Z" />
+</vector>

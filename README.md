@@ -1,0 +1,75 @@
+# Arth Vault
+
+A local-first personal finance ledger for Android. It reconstructs your financial
+record from bank SMS already on the device, and never sends any of it anywhere.
+
+Built against [`local-finance-app-spec.md`](local-finance-app-spec.md) (v0.1).
+
+## The privacy guarantee
+
+The app cannot reach the network. This is structural, not a promise:
+
+- `android.permission.INTERNET` is not declared, and is explicitly stripped at
+  manifest-merge time via `tools:node="remove"` so no transitive dependency can
+  reintroduce it.
+- No networking library (OkHttp, Retrofit, Firebase, any HTTP client) is on the
+  runtime classpath.
+- `android:allowBackup="false"` — the ledger is not eligible for Google cloud backup.
+- No telemetry, analytics, or crash reporting.
+
+`NetworkEgressGuardTest` asserts all of this against the **merged** manifest and
+the runtime classpath, so the build fails if it ever regresses.
+
+Verify it yourself on any build:
+
+```bash
+./gradlew :app:assembleDebug
+$ANDROID_HOME/build-tools/36.0.0/aapt2 dump permissions \
+    app/build/outputs/apk/debug/app-debug.apk
+```
+
+You should see exactly `READ_SMS`, `RECEIVE_SMS`, `USE_BIOMETRIC` and
+`USE_FINGERPRINT` — the last two gate the unlock prompt and reach no network.
+Notably absent: `INTERNET`.
+
+## Requirements
+
+- JDK 17+ (Android Studio's bundled JBR works)
+- Android SDK with platform 36
+- Gradle 9.3.1+ — supplied by the wrapper; AGP 9.1.1 requires it
+
+## Build and run
+
+```bash
+./gradlew :app:assembleDebug
+./gradlew :app:installDebug     # with a device or emulator attached
+```
+
+Two files are needed locally and are deliberately not committed:
+
+- `local.properties` — set `sdk.dir` to your Android SDK path.
+- `debug.keystore` — the debug signing config expects one in the project root.
+  Copy your standard one (`~/.android/debug.keystore`), or generate it:
+
+  ```bash
+  keytool -genkeypair -v -keystore debug.keystore -storepass android \
+      -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 \
+      -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+  ```
+
+## Tests
+
+```bash
+./gradlew :app:test
+```
+
+## Permissions
+
+`READ_SMS` and `RECEIVE_SMS` to read bank transaction messages, plus
+`USE_BIOMETRIC` / `USE_FINGERPRINT` to unlock the encrypted ledger.
+No location, no contacts, no storage-wide access.
+
+## Status
+
+See [`ROADMAP.md`](ROADMAP.md) for what is implemented against the spec and what
+is still outstanding.
