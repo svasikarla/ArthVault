@@ -70,6 +70,18 @@ project push an update over it.
 ./gradlew :app:test
 ```
 
+## Analysis
+
+Everything on the insights screen is arithmetic over rows you can open. Recurring
+charges need at least three of them at a consistent interval and a stable price;
+a price rise has to repeat before it is called a hike. Every figure carries the
+transaction ids behind it, so tapping an insight shows the charges that produced it.
+
+You can also ask the ledger a question — "spend on fuel last quarter", "biggest
+charge this month", "how much did I earn last month". The grammar is deterministic
+and small: there is no model involved, and a question it cannot read is refused
+rather than answered approximately.
+
 ## Parser rules
 
 The parser has no patterns compiled into it. Every rule lives in

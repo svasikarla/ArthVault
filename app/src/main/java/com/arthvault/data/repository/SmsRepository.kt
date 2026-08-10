@@ -5,6 +5,7 @@ import android.net.Uri
 import android.provider.Telephony
 import com.arthvault.data.analytics.AnomalyItem
 import com.arthvault.data.analytics.CategorySlice
+import com.arthvault.data.analytics.CategoryTrend
 import com.arthvault.data.analytics.FinanceAnalyticsEngine
 import com.arthvault.data.analytics.MonthEndForecast
 import com.arthvault.data.analytics.RecurringItem
@@ -26,6 +27,9 @@ import com.arthvault.data.parser.SenderMatcher
 import com.arthvault.data.parser.SmsParserEngine
 import com.arthvault.data.parser.rules.ParserRuleSeeder
 import com.arthvault.data.parser.rules.RuleLoadResult
+import com.arthvault.data.query.LedgerQueryEngine
+import com.arthvault.data.query.QueryParser
+import com.arthvault.data.query.QueryResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
@@ -70,7 +74,9 @@ data class AnalyticsResult(
     val forecast: MonthEndForecast? = null,
     val anomalies: List<AnomalyItem> = emptyList(),
     val duplicates: List<TransactionEntity> = emptyList(),
-    val categoryBreakdown: List<CategorySlice> = emptyList()
+    val categoryBreakdown: List<CategorySlice> = emptyList(),
+    /** F3.6 — this month against last, largest movement first. */
+    val categoryTrends: List<CategoryTrend> = emptyList()
 )
 
 class SmsRepository(private val context: Context) {
@@ -559,7 +565,12 @@ class SmsRepository(private val context: Context) {
      * fall out of sync with the data.
      */
     suspend fun computeAnalytics(): AnalyticsResult = withContext(Dispatchers.IO) {
-        val txns = transactionDao.getAllTransactions().first()
+        // The folded ledger, not the stored rows. Reading `transactionDao` directly —
+        // as this used to — meant every correction and every voided transaction was
+        // invisible to analytics: a transaction the user had removed still counted
+        // towards the spend total, the donut and the forecast, while the ledger
+        // screen right next to it showed it gone.
+        val txns = getAllTransactions().first()
         val monthRange = analyticsEngine.currentMonthRange()
 
         return@withContext AnalyticsResult(
@@ -571,9 +582,35 @@ class SmsRepository(private val context: Context) {
                 transactions = txns,
                 rangeStart = monthRange.first,
                 rangeEnd = monthRange.last
+            ),
+            // F3.6 — this month against last, largest movement first.
+            categoryTrends = analyticsEngine.compareCategories(
+                transactions = txns,
+                periodA = analyticsEngine.previousMonthRange(),
+                periodB = monthRange
             )
         )
     }
+
+    /**
+     * F4.1 — answers a typed question about the ledger.
+     *
+     * @return null when the grammar could not read the question. That is a real
+     *   answer: for a question about money, "I did not understand" beats a confident
+     *   number answering something else (F4.2 — nothing here is generated).
+     */
+    suspend fun answerQuestion(question: String): QueryResult? = withContext(Dispatchers.IO) {
+        val categories = categoryDao.getAllCategories().first().map { it.name }
+        val intent = QueryParser(categories).parse(question) ?: return@withContext null
+        LedgerQueryEngine().run(intent, getAllTransactions().first())
+    }
+
+    /** F4.4 — the rows behind a figure, for tap-through from any insight. */
+    suspend fun getTransactionsByIds(ids: List<Long>): List<TransactionEntity> =
+        withContext(Dispatchers.IO) {
+            val wanted = ids.toSet()
+            getAllTransactions().first().filter { it.id in wanted }
+        }
 
     /**
      * F5.1 — exports the ledger as the user sees it: corrections applied, voided

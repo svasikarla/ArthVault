@@ -12,6 +12,7 @@ import com.arthvault.data.local.entity.TransactionEntity
 import com.arthvault.data.local.entity.UnparsedSmsEntity
 import com.arthvault.data.parser.rules.ParserRuleSeeder
 import com.arthvault.data.parser.rules.RuleLoadResult
+import com.arthvault.data.query.QueryResult
 import com.arthvault.data.repository.AnalyticsResult
 import com.arthvault.data.repository.BackupResult
 import com.arthvault.data.repository.ImportResult
@@ -162,6 +163,52 @@ class AnalyticsViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             _analytics.value = repository.computeAnalytics()
         }
+    }
+
+    // --- F4.1 deterministic query ---
+
+    /**
+     * The answer to the last question, or [QueryAnswer.NotUnderstood].
+     *
+     * Distinguishing "I could not read that" from "the answer is zero" matters:
+     * they look identical if both render as ₹0, and one of them is the app being
+     * wrong rather than the ledger being empty.
+     */
+    private val _queryAnswer = MutableStateFlow<QueryAnswer?>(null)
+    val queryAnswer: StateFlow<QueryAnswer?> = _queryAnswer.asStateFlow()
+
+    sealed interface QueryAnswer {
+        data class Answered(val result: QueryResult) : QueryAnswer
+        data class NotUnderstood(val question: String) : QueryAnswer
+    }
+
+    fun ask(question: String) {
+        viewModelScope.launch {
+            val result = repository.answerQuestion(question)
+            _queryAnswer.value = result
+                ?.let { QueryAnswer.Answered(it) }
+                ?: QueryAnswer.NotUnderstood(question)
+        }
+    }
+
+    fun clearQueryAnswer() {
+        _queryAnswer.value = null
+    }
+
+    // --- F4.4 tap-through ---
+
+    private val _tappedThrough = MutableStateFlow<List<TransactionEntity>>(emptyList())
+    val tappedThrough: StateFlow<List<TransactionEntity>> = _tappedThrough.asStateFlow()
+
+    /** Opens the rows behind any insight — a slice, a recurring item, an answer. */
+    fun showSourceTransactions(ids: List<Long>) {
+        viewModelScope.launch {
+            _tappedThrough.value = repository.getTransactionsByIds(ids)
+        }
+    }
+
+    fun clearSourceTransactions() {
+        _tappedThrough.value = emptyList()
     }
 }
 

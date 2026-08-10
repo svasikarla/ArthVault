@@ -13,8 +13,11 @@ Status legend: **done** · **open** · **blocked**
 | 3 | Close the ingestion gaps | done |
 | 4 | Storage security and record integrity | done |
 | 5 | Parser rules as versioned, signed data files | done |
-| 6 | Analysis quality, trends, and query | open |
+| 6 | Analysis quality, trends, and query | done |
 | 7 | Accuracy harness and release hygiene | done |
+
+All phases in this document are now closed. What remains is under "Open questions
+and known gaps" below, which is where the outstanding work actually lives.
 
 Phase 7 was taken before 5 and 6, for the reason recorded under "Open questions"
 below: both of those change how messages are read and how the numbers are computed,
@@ -139,34 +142,59 @@ assertion and then crashes on the next launch.
 
 **87 tests pass.** Release APK 11.32 MB.
 
+**Phase 6** — the statistics now need evidence before they will claim anything.
+
+*Recurring detection (F3.1).* The old detector compared the two most recent charges
+and then let anything through with `|| merchantTxns.size >= 3`, so **any** merchant
+billed three times became a subscription — three Swiggy orders made Swiggy a
+recurring charge, and its "committed cost" was then added to the month-end forecast.
+Recurrence now requires ≥3 charges, gaps whose median absolute deviation is under 25%
+of the median gap, and amounts that cluster.
+
+Those last two pull against each other, and resolving that was the interesting part
+of this phase: **a price hike is itself a break in amount clustering**. Test the
+amounts naively and F3.2 becomes unreachable, because every item it should flag is
+disqualified from being recurring first. So charges are split into a current level —
+the newest run of similar amounts — and whatever came before, and each side must be
+internally tight. Random spending fails that (its leading run is one charge and the
+tail is scattered); a subscription that stepped up once passes, with both levels
+visible.
+
+*Price hikes (F3.2).* Compared against the median of the prior level rather than the
+single previous charge, and a hike must be **sustained** — at least two charges at the
+new price. F3.2 is about silent increases, which are permanent by nature; one
+expensive month is an anomaly, and F3.3 already reports those.
+
+*Category trends (F3.6).* `compareCategories` returns per-category totals, absolute
+delta and percentage change, largest movement first. Categories present in only one
+window are still reported: a category you stopped spending in is a trend. A category
+with no earlier spending gets a **null** percentage rather than infinity — "new
+spending" is a different statement from "up 100%", and rendering infinity as a number
+is how plausible-looking nonsense reaches the screen.
+
+*Query (F4.1/F4.2).* `data/query/` holds a deterministic grammar over
+metric / direction / category / merchant / period. No model, and there will not be
+one — F4.2 is explicit that numbers are computed and injected. The parser **refuses
+rather than guesses**: a question it cannot read returns null, because for a question
+about money "I did not understand" beats a confident number answering something else.
+It also echoes back what it understood, so a misread question is visible. Category
+aliases only resolve to categories that exist in that database — reporting
+"Health & Medical: ₹0" for a category the user never created is a wrong answer wearing
+the costume of a right one.
+
+*Tap-through (F4.4).* `RecurringItem`, `CategorySlice`, `CategoryTrend` and every
+`QueryResult` carry their source transaction ids, and the analytics screen opens them.
+An inference you cannot check is a number you have to take on faith.
+
+Also fixed while in here: `computeAnalytics` read `transactionDao` directly rather
+than the adjustment-folded ledger, so **every correction and every voided transaction
+was invisible to analytics** — a transaction the user had removed still counted
+towards the spend total, the donut and the forecast, while the ledger screen beside it
+showed it gone.
+
+**112 tests pass.** Release APK 11.32 MB.
+
 ---
-
-## Phase 6 — Analysis quality, trends, and query
-*Spec: F3.1 · F3.2 · F3.6 · F4.1 · F4.4. Est. ~1 week.*
-
-The statistical work is sound in method but thin in evidence — most of it looks at
-only the two most recent transactions.
-
-- **6.1** Real periodicity and amount clustering
-  (`FinanceAnalyticsEngine.detectRecurringAndPriceHikes`). Today the detector compares
-  `merchantTxns[0]` against `merchantTxns[1]`, with an escape hatch
-  `if (isPeriodic || merchantTxns.size >= 3)` that makes any merchant with three
-  charges "recurring" — order three Swiggy meals and Swiggy becomes a
-  subscription. Require ≥3 charges, take the median inter-arrival gap, require
-  `MAD / median < 0.25`, and require ≥70% of amounts within 15% of the median.
-  Delete the `|| size >= 3` hatch.
-- **6.2** Compare price hikes against the median of prior charges, not against the
-  single previous charge, and require the new amount to persist across two
-  consecutive periods. F3.2 is about *silent* hikes, which are sustained by nature.
-- **6.3** Category trend comparison across periods (F3.6, entirely absent). Add
-  `compareCategories(periodA, periodB)` returning per-category totals, absolute
-  delta and percentage change.
-- **6.4** Deterministic natural-language query (`data/query/QueryParser.kt`, new).
-  A small intent grammar over metric / direction / category / merchant / period.
-  No LLM — F4.2 forbids one from touching the numbers. Return the computed number
-  *with* the contributing transaction IDs.
-- **6.5** Tap-through from every insight (F4.4). Carry `transactionIds` on
-  `RecurringItem`, `CategorySlice`, `AnomalyItem` and every query result.
 
 ---
 
@@ -184,7 +212,19 @@ These are decisions or debts not owned by any phase above.
   exclude `TxnType.TRANSFER` from outflows, so moving money between your own
   accounts inflates the spend total, the donut and the forecast. Needs a product
   decision: net out transfers when both legs are visible, or let the user mark
-  accounts as their own.
+  accounts as their own. **This is now the largest known source of wrong numbers on
+  screen** — Phase 6 removed the others.
+- **The recurring thresholds are asserted, not calibrated.** `MAX_GAP_DISPERSION`,
+  `AMOUNT_TOLERANCE` and `MIN_CLUSTERED_FRACTION` come from the spec and from
+  judgement, and the tests fix the behaviour at those values against invented data.
+  Whether 0.25 is the right dispersion for real Indian billing — where a monthly
+  charge routinely lands 28 to 33 days apart, and annual renewals drift — is
+  unanswered until there is a year of real ledger to check it against. §6's success
+  criterion ("surfaces at least one forgotten or increased subscription") is the test
+  that matters, and it takes months of use, not a unit test.
+- **The query grammar's vocabulary is narrow by choice.** It handles metric,
+  direction, category, merchant and period, and refuses everything else rather than
+  guessing. Widening it is safe; making it guess is not.
 - **Only v3→v4 is covered by a migration test.** Phase 5 added `MigrationTest`, but
   `app/schemas/` has no `1.json`, so v1→v2 cannot be reconstructed and v2→v3 is still
   unverified. Anyone still on v1 or v2 is migrating on hope.

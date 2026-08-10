@@ -3,6 +3,9 @@ package com.arthvault.ui.screens
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,21 +28,29 @@ import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,11 +59,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.arthvault.data.analytics.CategorySlice
+import com.arthvault.data.analytics.CategoryTrend
 import com.arthvault.data.analytics.MonthEndForecast
 import com.arthvault.data.analytics.RecurringItem
+import com.arthvault.data.query.QueryMetric
 import com.arthvault.ui.theme.ArthCrimson
 import com.arthvault.ui.theme.ArthEmerald
 import com.arthvault.ui.theme.ArthEmeraldLight
@@ -60,6 +74,9 @@ import com.arthvault.ui.theme.ArthGold
 import com.arthvault.ui.theme.ArthGoldLight
 import com.arthvault.ui.theme.ArthIndigo
 import com.arthvault.ui.viewmodel.AnalyticsViewModel
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun AnalyticsScreen(
@@ -71,9 +88,53 @@ fun AnalyticsScreen(
     val anomalies = analytics.anomalies
     val duplicates = analytics.duplicates
     val categoryBreakdown = analytics.categoryBreakdown
+    val categoryTrends = analytics.categoryTrends
+
+    val queryAnswer by viewModel.queryAnswer.collectAsState()
+    val tappedThrough by viewModel.tappedThrough.collectAsState()
+    var question by rememberSaveable { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
         viewModel.refreshAnalytics()
+    }
+
+    // F4.4 — the rows behind whichever figure was tapped. Every insight on this
+    // screen carries its source transaction ids, so a number that looks wrong can be
+    // opened and checked rather than argued with.
+    if (tappedThrough.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = { viewModel.clearSourceTransactions() },
+            title = { Text("${tappedThrough.size} transactions", fontWeight = FontWeight.Bold) },
+            text = {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    items(tappedThrough) { txn ->
+                        Column {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(txn.merchant, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    "%s%,.2f".format(
+                                        if (txn.direction == "DEBIT") "-" else "+", txn.amount
+                                    ),
+                                    color = if (txn.direction == "DEBIT") ArthCrimson else ArthEmerald,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Text(
+                                "${txn.category} · ${formatDate(txn.timestamp)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.clearSourceTransactions() }) { Text("Close") }
+            }
+        )
     }
 
     Scaffold { padding ->
@@ -110,10 +171,107 @@ fun AnalyticsScreen(
                 }
             }
 
+            // F4.1 — ask the ledger a question. Nothing here is generated: the
+            // grammar is deterministic and the arithmetic runs over rows you can
+            // open (F4.2 forbids a model anywhere near the numbers).
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(modifier = Modifier.padding(18.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Search, contentDescription = null, tint = ArthGold)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "Ask your ledger",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(10.dp))
+                        OutlinedTextField(
+                            value = question,
+                            onValueChange = { question = it },
+                            placeholder = { Text("e.g. spend on fuel last quarter") },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            keyboardActions = KeyboardActions(onSearch = { viewModel.ask(question) })
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Button(
+                            onClick = { viewModel.ask(question) },
+                            enabled = question.isNotBlank(),
+                            shape = RoundedCornerShape(12.dp)
+                        ) { Text("Ask", fontWeight = FontWeight.SemiBold) }
+
+                        when (val answer = queryAnswer) {
+                            null -> Unit
+
+                            // Saying "I could not read that" is a real answer. Showing
+                            // a confident 0 for a question the app misread is how a
+                            // wrong number gets believed.
+                            is AnalyticsViewModel.QueryAnswer.NotUnderstood -> {
+                                Spacer(modifier = Modifier.height(14.dp))
+                                Text(
+                                    "That question could not be read. Try naming a metric and " +
+                                        "a subject, e.g. \"total spend on groceries last month\".",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+
+                            is AnalyticsViewModel.QueryAnswer.Answered -> {
+                                val result = answer.result
+                                Spacer(modifier = Modifier.height(14.dp))
+                                // The restatement matters as much as the figure: a
+                                // misread question is only detectable if the app says
+                                // which one it answered.
+                                Text(
+                                    result.intent.interpretation,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    if (result.intent.metric == QueryMetric.COUNT) {
+                                        "%,.0f".format(result.value)
+                                    } else {
+                                        "₹%,.2f".format(result.value)
+                                    },
+                                    style = MaterialTheme.typography.headlineMedium,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = ArthGold
+                                )
+                                if (result.transactionIds.isNotEmpty()) {
+                                    TextButton(
+                                        onClick = { viewModel.showSourceTransactions(result.transactionIds) }
+                                    ) {
+                                        Text("From ${result.matchCount} transactions — show them")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Month-End Cash Position Forecast Card
             item {
                 forecast?.let { f ->
                     ForecastCard(forecast = f)
+                }
+            }
+
+            // F3.6 — this month against last, biggest movement first.
+            item {
+                if (categoryTrends.isNotEmpty()) {
+                    CategoryTrendCard(
+                        trends = categoryTrends.take(6),
+                        onTrendClick = { viewModel.showSourceTransactions(it.transactionIds) }
+                    )
                 }
             }
 
@@ -181,7 +339,17 @@ fun AnalyticsScreen(
                 }
             } else {
                 items(recurringList) { item ->
-                    RecurringItemCard(item = item)
+                    // F4.4 — a recurring charge is an inference, so the charges it
+                    // was inferred from have to be reachable. "Netflix, ₹649
+                    // monthly" is only checkable if you can see the three charges
+                    // that produced it.
+                    Box(
+                        modifier = Modifier.clickable {
+                            viewModel.showSourceTransactions(item.transactionIds)
+                        }
+                    ) {
+                        RecurringItemCard(item = item)
+                    }
                 }
             }
 
@@ -497,3 +665,81 @@ fun RecurringItemCard(item: RecurringItem) {
     }
 }
 
+
+/**
+ * F3.6 — per-category movement between last month and this one.
+ *
+ * Sorted by the size of the change rather than by total, because a category that
+ * doubled matters more than the one that is merely largest — and the largest is
+ * already the first slice of the donut above.
+ */
+@Composable
+private fun CategoryTrendCard(
+    trends: List<CategoryTrend>,
+    onTrendClick: (CategoryTrend) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(modifier = Modifier.padding(18.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.TrendingUp, contentDescription = null, tint = ArthIndigo)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    "Category trends",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Text(
+                "This month against last",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            trends.forEach { trend ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onTrendClick(trend) }
+                        .padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(trend.category, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "₹%,.0f → ₹%,.0f".format(trend.previousTotal, trend.currentTotal),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            "%s₹%,.0f".format(if (trend.delta >= 0) "+" else "-", kotlin.math.abs(trend.delta)),
+                            fontWeight = FontWeight.Bold,
+                            color = if (trend.delta > 0) ArthCrimson else ArthEmerald
+                        )
+                        Text(
+                            // A null percentage is "new spending", not "up 100%".
+                            // Dividing by a zero baseline yields infinity, and
+                            // rendering that as a number puts plausible-looking
+                            // nonsense on screen.
+                            trend.percentageChange
+                                ?.let { "%s%.0f%%".format(if (it >= 0) "+" else "", it) }
+                                ?: "new",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun formatDate(timestamp: Long): String =
+    SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(timestamp))
