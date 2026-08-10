@@ -12,6 +12,7 @@ import com.arthvault.data.local.dao.AdjustmentDao
 import com.arthvault.data.local.dao.AppSettingDao
 import com.arthvault.data.local.dao.CategoryDao
 import com.arthvault.data.local.dao.MerchantRuleDao
+import com.arthvault.data.local.dao.OwnAccountDao
 import com.arthvault.data.local.dao.ParserRuleDao
 import com.arthvault.data.local.dao.SenderAllowlistDao
 import com.arthvault.data.local.dao.TransactionDao
@@ -22,6 +23,7 @@ import com.arthvault.data.local.entity.AdjustmentSource
 import com.arthvault.data.local.entity.AppSettingEntity
 import com.arthvault.data.local.entity.CategoryEntity
 import com.arthvault.data.local.entity.MerchantRuleEntity
+import com.arthvault.data.local.entity.OwnAccountEntity
 import com.arthvault.data.local.entity.ParserRuleEntity
 import com.arthvault.data.local.entity.SenderAllowlistEntity
 import com.arthvault.data.local.entity.TransactionEntity
@@ -41,9 +43,10 @@ import java.io.File
         CategoryEntity::class,
         SenderAllowlistEntity::class,
         AdjustmentEntity::class,
-        AppSettingEntity::class
+        AppSettingEntity::class,
+        OwnAccountEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -56,6 +59,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun senderAllowlistDao(): SenderAllowlistDao
     abstract fun adjustmentDao(): AdjustmentDao
     abstract fun appSettingDao(): AppSettingDao
+    abstract fun ownAccountDao(): OwnAccountDao
 
     companion object {
         const val DATABASE_NAME = "vault_ledger.db"
@@ -249,6 +253,27 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * F3.x — the user gets to say which accounts are their own.
+         *
+         * Purely additive: one new table, nothing rewritten. Every existing install
+         * arrives with it empty, which reproduces exactly the behaviour they have
+         * today — internal transfers still counted — until they mark an account.
+         * A migration that silently changed everyone's spending totals on upgrade
+         * would be indistinguishable from a bug.
+         */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS own_accounts (" +
+                        "tail TEXT NOT NULL, " +
+                        "label TEXT NOT NULL, " +
+                        "markedAt INTEGER NOT NULL, " +
+                        "PRIMARY KEY(tail))"
+                )
+            }
+        }
+
         /** True once [open] has succeeded; false before unlock and after [lock]. */
         val isOpen: Boolean get() = INSTANCE != null
 
@@ -292,7 +317,7 @@ abstract class AppDatabase : RoomDatabase() {
                     )
                         .openHelperFactory(SupportOpenHelperFactory(passphraseHex.copyOf()))
                         .addCallback(DatabaseCallback())
-                        .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                        .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                         .build()
                 } finally {
                     VaultCrypto.wipe(passphraseHex)

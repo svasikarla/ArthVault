@@ -2,11 +2,8 @@ package com.arthvault.ui.screens
 
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,31 +11,25 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.NoCell
 import androidx.compose.material.icons.filled.Save
-import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
-import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -51,18 +42,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.arthvault.data.backup.BackupCodec
+import com.arthvault.ui.components.CardHeading
+import com.arthvault.ui.components.LocalSnackbar
+import com.arthvault.ui.components.VaultCard
+import com.arthvault.ui.components.VaultScaffold
+import com.arthvault.ui.theme.Spacing
+import com.arthvault.ui.theme.VaultTheme
+import com.arthvault.ui.theme.payload
 import com.arthvault.ui.vault.SystemUiGuard
-import com.arthvault.ui.theme.ArthCrimson
-import com.arthvault.ui.theme.ArthEmerald
-import com.arthvault.ui.theme.ArthGold
-import com.arthvault.ui.theme.ArthIndigo
 import com.arthvault.ui.viewmodel.VaultViewModel
 
 /**
@@ -97,6 +89,7 @@ fun VaultScreen(
     val backupResult by viewModel.backupResult.collectAsState()
     val restoreResult by viewModel.restoreResult.collectAsState()
     var showWipeConfirmDialog by remember { mutableStateOf(false) }
+    val semantics = VaultTheme.semantics
 
     // F5.3 — the passphrase is collected first, then the file location, so a
     // cancelled or mistyped passphrase never leaves an empty file behind.
@@ -123,183 +116,152 @@ fun VaultScreen(
         pendingPassphrase = ""
     }
 
-    Scaffold { padding ->
+    VaultScaffold(title = "Vault") { padding ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .background(MaterialTheme.colorScheme.background)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(horizontal = Spacing.standard),
+            verticalArrangement = Arrangement.spacedBy(Spacing.standard)
         ) {
             item {
                 Text(
-                    text = "Vault Privacy & Security",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.ExtraBold
-                )
-                Text(
-                    text = "Your data, on your device • Verifiable in this build",
-                    style = MaterialTheme.typography.bodySmall,
+                    text = "Your data, on your device — verifiable in this build.",
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
-            // Zero Network Egress Certificate Card
+            // Zero network egress certificate
             item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(20.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, ArthEmerald.copy(alpha = 0.35f)),
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (hasNetworkPermission) {
-                            ArthCrimson.copy(alpha = 0.08f)
-                        } else {
-                            ArthEmerald.copy(alpha = 0.08f)
-                        }
+                val ok = !hasNetworkPermission
+                val accent = if (ok) semantics.positive else semantics.negative
+                VaultCard(accent = accent) {
+                    CardHeading(
+                        title = if (ok) "No network access" else "Network access detected",
+                        icon = Icons.Default.Shield,
+                        iconTint = accent
                     )
-                ) {
-                    Column(modifier = Modifier.padding(18.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Default.Shield,
-                                contentDescription = null,
-                                tint = if (hasNetworkPermission) ArthCrimson else ArthEmerald,
-                                modifier = Modifier.size(28.dp)
-                            )
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Text(
-                                text = if (hasNetworkPermission) {
-                                    "Network Access Detected"
-                                } else {
-                                    "No Network Access"
-                                },
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = if (hasNetworkPermission) ArthCrimson else ArthEmerald
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Text(
-                            text = if (hasNetworkPermission) {
-                                "This build declares android.permission.INTERNET. Your ledger " +
-                                    "could leave this device. This is a bug — please report it."
-                            } else {
-                                "This build cannot reach the network. It declares no internet " +
-                                    "permission and links no networking library."
-                            },
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            fontWeight = FontWeight.Medium
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text(
-                            text = "PERMISSIONS THIS BUILD DECLARES",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = declaredPermissions.joinToString("\n") { "• $it" }
-                                .ifBlank { "• (none)" },
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = FontFamily.Monospace,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Text(
-                            text = "• Data residence: on-device SQLite only.\n" +
-                                "• At rest: SQLCipher (AES-256), key held in secure hardware.\n" +
-                                "• Cloud auto-backup: disabled.\n" +
-                                "• Telemetry / crash reporting: none.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
+                    Spacer(modifier = Modifier.height(Spacing.tight))
+                    Text(
+                        text = if (ok) {
+                            "This build cannot reach the network. It declares no internet " +
+                                "permission and links no networking library."
+                        } else {
+                            "This build declares android.permission.INTERNET. Your ledger " +
+                                "could leave this device. This is a bug — please report it."
+                        },
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.height(Spacing.snug))
+                    Text(
+                        text = "PERMISSIONS THIS BUILD DECLARES",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(Spacing.hairline))
+                    Text(
+                        text = declaredPermissions.joinToString("\n") { "• $it" }
+                            .ifBlank { "• (none)" },
+                        style = MaterialTheme.typography.payload
+                    )
+                    Spacer(modifier = Modifier.height(Spacing.tight))
+                    Text(
+                        text = "• Data residence: on-device SQLite only.\n" +
+                            "• At rest: SQLCipher (AES-256), key held in secure hardware.\n" +
+                            "• Cloud auto-backup: disabled.\n" +
+                            "• Telemetry / crash reporting: none.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
 
-            // Data Export & Backup Section
+            // Export
             item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(20.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    Column(modifier = Modifier.padding(18.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Download, contentDescription = null, tint = ArthGold)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Export & Backup Ledger Data", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                VaultCard {
+                    CardHeading(
+                        title = "Export your ledger",
+                        icon = Icons.Default.Download,
+                        iconTint = MaterialTheme.colorScheme.primary,
+                        subtitle = "Plain files you can open anywhere. Not encrypted."
+                    )
+                    Spacer(modifier = Modifier.height(Spacing.snug))
+                    // One filled button per surface: CSV is the common case, JSON is
+                    // the secondary. Two filled buttons side by side made neither read
+                    // as the primary.
+                    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.tight)) {
+                        Button(
+                            onClick = { viewModel.exportCsv() },
+                            modifier = Modifier.weight(1f),
+                            shape = MaterialTheme.shapes.small
+                        ) {
+                            Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(Spacing.tight))
+                            Text("Export CSV")
                         }
-                        Spacer(modifier = Modifier.height(14.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Button(
-                                onClick = { viewModel.exportCsv() },
-                                modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary)
-                            ) {
-                                Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Export CSV", fontWeight = FontWeight.SemiBold)
-                            }
-                            OutlinedButton(
-                                onClick = { viewModel.exportJson() },
-                                modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Text("Export JSON", fontWeight = FontWeight.SemiBold)
-                            }
+                        OutlinedButton(
+                            onClick = { viewModel.exportJson() },
+                            modifier = Modifier.weight(1f),
+                            shape = MaterialTheme.shapes.small
+                        ) {
+                            Text("Export JSON")
                         }
+                    }
 
-                        exportedFile?.let { file ->
-                            Spacer(modifier = Modifier.height(14.dp))
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Column(modifier = Modifier.padding(14.dp)) {
-                                    Text("CSV File Created: ${file.name}", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Button(
-                                        onClick = {
-                                            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-                                            val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                                                type = "text/csv"
-                                                putExtra(Intent.EXTRA_STREAM, uri)
-                                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                            }
-                                            SystemUiGuard.enter()
-                                            context.startActivity(Intent.createChooser(shareIntent, "Share Ledger CSV"))
-                                        },
-                                        shape = RoundedCornerShape(10.dp)
-                                    ) {
-                                        Text("Share / Save File")
-                                    }
+                    exportedFile?.let { file ->
+                        Spacer(modifier = Modifier.height(Spacing.snug))
+                        Surface(
+                            shape = MaterialTheme.shapes.small,
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(Spacing.snug)) {
+                                Text(
+                                    "Created ${file.name}",
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                                Spacer(modifier = Modifier.height(Spacing.tight))
+                                OutlinedButton(
+                                    onClick = {
+                                        val uri = FileProvider.getUriForFile(
+                                            context, "${context.packageName}.fileprovider", file
+                                        )
+                                        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                            type = "text/csv"
+                                            putExtra(Intent.EXTRA_STREAM, uri)
+                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                        }
+                                        SystemUiGuard.enter()
+                                        context.startActivity(
+                                            Intent.createChooser(shareIntent, "Share ledger CSV")
+                                        )
+                                    },
+                                    shape = MaterialTheme.shapes.small
+                                ) {
+                                    Text("Share the file")
                                 }
                             }
                         }
+                    }
 
-                        exportedJson?.let { json ->
-                            Spacer(modifier = Modifier.height(14.dp))
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Column(modifier = Modifier.padding(14.dp)) {
-                                    Text("JSON Export Preview:", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        text = json.take(300) + "...",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontFamily = FontFamily.Monospace
-                                    )
-                                }
+                    exportedJson?.let { json ->
+                        Spacer(modifier = Modifier.height(Spacing.snug))
+                        Surface(
+                            shape = MaterialTheme.shapes.small,
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(Spacing.snug)) {
+                                Text(
+                                    "JSON preview",
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                                Spacer(modifier = Modifier.height(Spacing.hairline))
+                                Text(
+                                    text = json.take(300) + "…",
+                                    style = MaterialTheme.typography.payload
+                                )
                             }
                         }
                     }
@@ -308,163 +270,157 @@ fun VaultScreen(
 
             // F5.3 — Encrypted backup to a location the user picks
             item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(20.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, ArthIndigo.copy(alpha = 0.35f)),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    Column(modifier = Modifier.padding(18.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Lock, contentDescription = null, tint = ArthIndigo)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                "Encrypted Backup",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "Writes your whole vault — transactions, corrections, rules and " +
-                                "sender list — to one encrypted .avault file wherever you choose.\n\n" +
-                                "The file is sealed with a passphrase you pick, not with this " +
-                                "phone's hardware key. That is deliberate: a hardware key cannot " +
-                                "leave the device, so a backup sealed with it could never be " +
-                                "restored to a new one. Nobody can recover this passphrase for you.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(modifier = Modifier.height(14.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Button(
-                                onClick = { passphrasePrompt = PassphrasePrompt.Backup },
-                                modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Back up", fontWeight = FontWeight.SemiBold)
-                            }
-                            OutlinedButton(
-                                onClick = { passphrasePrompt = PassphrasePrompt.Restore },
-                                modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Text("Restore", fontWeight = FontWeight.SemiBold)
-                            }
-                        }
-
-                        backupResult?.let { result ->
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                text = result.error
-                                    ?: "Backup written — ${result.transactionCount} transactions, " +
-                                    "${result.byteCount / 1024} KB, encrypted.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (result.error != null) ArthCrimson else ArthEmerald
-                            )
-                        }
-
-                        restoreResult?.let { result ->
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                text = result.error
-                                    ?: "Restored ${result.transactionsRestored} transactions " +
-                                    "(${result.duplicatesSkipped} already present).",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (result.error != null) ArthCrimson else ArthEmerald
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Danger Zone: Local Data Wipe
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(20.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, ArthCrimson.copy(alpha = 0.35f)),
-                    colors = CardDefaults.cardColors(containerColor = ArthCrimson.copy(alpha = 0.08f))
-                ) {
-                    Column(modifier = Modifier.padding(18.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.DeleteForever, contentDescription = null, tint = ArthCrimson)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Full Local Wipe", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = ArthCrimson)
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "Irreversibly delete all ledger transactions, unparsed SMS queues, and custom rule overrides from this device.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(modifier = Modifier.height(14.dp))
+                VaultCard {
+                    CardHeading(
+                        title = "Encrypted backup",
+                        icon = Icons.Default.Lock,
+                        iconTint = semantics.info
+                    )
+                    Spacer(modifier = Modifier.height(Spacing.tight))
+                    Text(
+                        text = "Writes your whole vault — transactions, corrections, rules and " +
+                            "sender list — to one encrypted .avault file wherever you choose.\n\n" +
+                            "The file is sealed with a passphrase you pick, not with this " +
+                            "phone's hardware key. That is deliberate: a hardware key cannot " +
+                            "leave the device, so a backup sealed with it could never be " +
+                            "restored to a new one. Nobody can recover this passphrase for you.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(Spacing.snug))
+                    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.tight)) {
                         Button(
-                            onClick = { showWipeConfirmDialog = true },
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = ArthCrimson, contentColor = androidx.compose.ui.graphics.Color.White)
+                            onClick = { passphrasePrompt = PassphrasePrompt.Backup },
+                            modifier = Modifier.weight(1f),
+                            shape = MaterialTheme.shapes.small
                         ) {
-                            Icon(Icons.Default.DeleteForever, contentDescription = null)
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Execute Full Local Wipe", fontWeight = FontWeight.Bold)
+                            Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(Spacing.tight))
+                            Text("Back up")
                         }
+                        OutlinedButton(
+                            onClick = { passphrasePrompt = PassphrasePrompt.Restore },
+                            modifier = Modifier.weight(1f),
+                            shape = MaterialTheme.shapes.small
+                        ) {
+                            Text("Restore")
+                        }
+                    }
+
+                    backupResult?.let { result ->
+                        Spacer(modifier = Modifier.height(Spacing.snug))
+                        Text(
+                            text = result.error
+                                ?: "Backup written — ${result.transactionCount} transactions, " +
+                                "${result.byteCount / 1024} KB, encrypted.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (result.error != null) semantics.negative else semantics.positive
+                        )
+                    }
+
+                    restoreResult?.let { result ->
+                        Spacer(modifier = Modifier.height(Spacing.snug))
+                        Text(
+                            text = result.error
+                                ?: "Restored ${result.transactionsRestored} transactions " +
+                                "(${result.duplicatesSkipped} already present).",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (result.error != null) semantics.negative else semantics.positive
+                        )
                     }
                 }
             }
 
-            item { Spacer(modifier = Modifier.height(32.dp)) }
+            // Danger zone
+            item {
+                VaultCard(accent = semantics.negative) {
+                    CardHeading(
+                        title = "Delete everything on this device",
+                        icon = Icons.Default.DeleteForever,
+                        iconTint = semantics.negative
+                    )
+                    Spacer(modifier = Modifier.height(Spacing.tight))
+                    Text(
+                        text = "Irreversibly deletes every transaction, unparsed message and " +
+                            "custom rule stored here. Back up first if you might want any of it.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.height(Spacing.snug))
+                    // Outlined, not filled: a destructive action should not look like
+                    // the thing the screen wants you to do.
+                    OutlinedButton(
+                        onClick = { showWipeConfirmDialog = true },
+                        shape = MaterialTheme.shapes.small,
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Text("Delete all data")
+                    }
+                }
+            }
+
+            item { Spacer(modifier = Modifier.height(Spacing.section)) }
+        }
+
+        // The dialogs live inside the scaffold's content, not beside it.
+        //
+        // LocalSnackbar is provided by VaultScaffold and therefore only reaches this
+        // lambda. As a sibling of VaultScaffold, the wipe dialog below read the local
+        // with no provider above it and threw the moment "Delete all data" was tapped.
+        // Dialogs compose into their own window and contribute no layout node here, so
+        // nesting them costs nothing.
+        passphrasePrompt?.let { prompt ->
+            PassphraseDialog(
+                prompt = prompt,
+                onDismiss = { passphrasePrompt = null },
+                onConfirm = { passphrase ->
+                    pendingPassphrase = passphrase
+                    passphrasePrompt = null
+                    viewModel.clearBackupResults()
+                    // The picker stops this activity; without this the lock policy
+                    // would close the database before the file is chosen.
+                    SystemUiGuard.enter()
+                    when (prompt) {
+                        PassphrasePrompt.Backup ->
+                            backupLauncher.launch("arth-vault-${System.currentTimeMillis()}.${BackupCodec.FILE_EXTENSION}")
+                        PassphrasePrompt.Restore ->
+                            restoreLauncher.launch(arrayOf("*/*"))
+                    }
+                }
+            )
+        }
+
+        if (showWipeConfirmDialog) {
+            val snackbar = LocalSnackbar.current
+            AlertDialog(
+                onDismissRequest = { showWipeConfirmDialog = false },
+                shape = MaterialTheme.shapes.extraLarge,
+                title = { Text("Delete everything?") },
+                text = {
+                    Text(
+                        "Every transaction and rule stored on this device will be erased. " +
+                            "This cannot be undone."
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            viewModel.fullWipe()
+                            showWipeConfirmDialog = false
+                            snackbar.show("All local ledger data deleted")
+                        }
+                    ) {
+                        Text("Delete everything", color = MaterialTheme.colorScheme.error)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showWipeConfirmDialog = false }) { Text("Cancel") }
+                }
+            )
         }
     }
-
-    passphrasePrompt?.let { prompt ->
-        PassphraseDialog(
-            prompt = prompt,
-            onDismiss = { passphrasePrompt = null },
-            onConfirm = { passphrase ->
-                pendingPassphrase = passphrase
-                passphrasePrompt = null
-                viewModel.clearBackupResults()
-                // The picker stops this activity; without this the lock policy
-                // would close the database before the file is chosen.
-                SystemUiGuard.enter()
-                when (prompt) {
-                    PassphrasePrompt.Backup ->
-                        backupLauncher.launch("arth-vault-${System.currentTimeMillis()}.${BackupCodec.FILE_EXTENSION}")
-                    PassphrasePrompt.Restore ->
-                        restoreLauncher.launch(arrayOf("*/*"))
-                }
-            }
-        )
-    }
-
-    if (showWipeConfirmDialog) {
-        AlertDialog(
-            onDismissRequest = { showWipeConfirmDialog = false },
-            title = { Text("Confirm Full Local Wipe", fontWeight = FontWeight.Bold) },
-            text = { Text("Are you sure you want to delete all stored transactions and database records? This operation cannot be undone.") },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        viewModel.fullWipe()
-                        showWipeConfirmDialog = false
-                        Toast.makeText(context, "All local ledger data wiped.", Toast.LENGTH_SHORT).show()
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = ArthCrimson)
-                ) {
-                    Text("Wipe All Data")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showWipeConfirmDialog = false }) {
-                    Text("Cancel")
-                }
-            }
-        )
-    }
 }
-
 
 enum class PassphrasePrompt { Backup, Restore }
 
@@ -492,11 +448,9 @@ private fun PassphraseDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = MaterialTheme.shapes.extraLarge,
         title = {
-            Text(
-                if (isBackup) "Choose a backup passphrase" else "Enter the backup passphrase",
-                fontWeight = FontWeight.Bold
-            )
+            Text(if (isBackup) "Choose a backup passphrase" else "Enter the backup passphrase")
         },
         text = {
             Column {
@@ -507,48 +461,45 @@ private fun PassphraseDialog(
                     } else {
                         "The passphrase used when this backup was written."
                     },
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(Spacing.snug))
                 OutlinedTextField(
                     value = passphrase,
                     onValueChange = { passphrase = it },
                     label = { Text("Passphrase") },
                     singleLine = true,
+                    isError = passphrase.isNotEmpty() && tooShort,
+                    supportingText = if (passphrase.isNotEmpty() && tooShort) {
+                        { Text("At least ${BackupCodec.MIN_PASSPHRASE_LENGTH} characters") }
+                    } else null,
+                    shape = MaterialTheme.shapes.small,
                     visualTransformation = if (reveal) VisualTransformation.None else PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth()
                 )
                 if (isBackup) {
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(Spacing.tight))
                     OutlinedTextField(
                         value = confirmation,
                         onValueChange = { confirmation = it },
                         label = { Text("Confirm passphrase") },
                         singleLine = true,
                         isError = mismatch,
+                        supportingText = if (mismatch) {
+                            { Text("The two entries do not match") }
+                        } else null,
+                        shape = MaterialTheme.shapes.small,
                         visualTransformation = if (reveal) VisualTransformation.None else PasswordVisualTransformation(),
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
-                Spacer(modifier = Modifier.height(6.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier.heightIn(min = 48.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Checkbox(checked = reveal, onCheckedChange = { reveal = it })
-                    Text("Show passphrase", style = MaterialTheme.typography.bodySmall)
-                }
-                if (passphrase.isNotEmpty() && tooShort) {
-                    Text(
-                        text = "At least ${BackupCodec.MIN_PASSPHRASE_LENGTH} characters.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ArthCrimson
-                    )
-                }
-                if (mismatch) {
-                    Text(
-                        text = "The two entries do not match.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ArthCrimson
-                    )
+                    Text("Show passphrase", style = MaterialTheme.typography.bodyMedium)
                 }
             }
         },
@@ -557,8 +508,6 @@ private fun PassphraseDialog(
                 Text(if (isBackup) "Choose location" else "Choose file")
             }
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        }
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }

@@ -3,6 +3,7 @@ package com.arthvault.data.backup
 import com.arthvault.data.crypto.VaultCrypto
 import com.arthvault.data.local.entity.CategoryEntity
 import com.arthvault.data.local.entity.MerchantRuleEntity
+import com.arthvault.data.local.entity.OwnAccountEntity
 import com.arthvault.data.local.entity.ParserRuleEntity
 import com.arthvault.data.local.entity.SenderAllowlistEntity
 import com.arthvault.data.local.entity.TransactionEntity
@@ -24,6 +25,14 @@ data class BackupPayload(
     val customCategories: List<CategoryEntity> = emptyList(),
     val customParserRules: List<ParserRuleEntity> = emptyList(),
     val senderAllowlist: List<SenderAllowlistEntity> = emptyList(),
+    /**
+     * Which accounts are the user's own (v5).
+     *
+     * Omitting these would make a restore quietly restate the user's figures: every
+     * transfer between their own accounts would count as spending again, and the
+     * restored ledger would disagree with the one that was backed up.
+     */
+    val ownAccounts: List<OwnAccountEntity> = emptyList(),
     val createdAt: Long = System.currentTimeMillis()
 )
 
@@ -156,6 +165,16 @@ object BackupCodec {
             }
         })
 
+        root.put("ownAccounts", JSONArray().apply {
+            payload.ownAccounts.forEach { a ->
+                put(JSONObject().apply {
+                    put("tail", a.tail)
+                    put("label", a.label)
+                    put("markedAt", a.markedAt)
+                })
+            }
+        })
+
         return root.toString()
     }
 
@@ -233,6 +252,15 @@ object BackupCodec {
                     senderId = o.getString("senderId"),
                     label = o.optString("label", o.getString("senderId")),
                     isEnabled = o.optBoolean("isEnabled", true)
+                )
+            },
+            // Absent from any backup written before v5, which reads as an empty list —
+            // the same state a pre-v5 install was in. Nothing to reconcile.
+            ownAccounts = root.optJSONArray("ownAccounts").map { o ->
+                OwnAccountEntity(
+                    tail = o.getString("tail"),
+                    label = o.optString("label", "Account"),
+                    markedAt = o.optLong("markedAt", System.currentTimeMillis())
                 )
             }
         )

@@ -9,7 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Lock
@@ -25,11 +25,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.arthvault.ui.theme.Spacing
+import com.arthvault.ui.theme.VaultTheme
 import com.arthvault.ui.vault.VaultState
 
 /**
@@ -39,6 +38,9 @@ import com.arthvault.ui.vault.VaultState
  * created with `setUserAuthenticationRequired(true)`, so until the prompt behind
  * this screen succeeds the secure hardware will not perform the unwrap and there
  * is no key with which to read a single row.
+ *
+ * It is also the first screen anyone sees, and it was the only one not on the type
+ * system — nine hardcoded `fontSize` values between 13 and 28sp.
  */
 @Composable
 fun LockScreen(
@@ -53,7 +55,7 @@ fun LockScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
-            .padding(32.dp),
+            .padding(Spacing.section),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
@@ -82,16 +84,15 @@ private fun LockedContent(
         imageVector = Icons.Default.Lock,
         contentDescription = null,
         tint = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.size(64.dp)
+        modifier = Modifier.size(56.dp)
     )
-    Spacer(Modifier.height(24.dp))
+    Spacer(Modifier.height(Spacing.loose))
     Text(
         text = "Arth Vault",
-        fontSize = 28.sp,
-        fontWeight = FontWeight.Bold,
+        style = MaterialTheme.typography.headlineLarge,
         color = MaterialTheme.colorScheme.onBackground
     )
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(Spacing.tight))
     Text(
         text = if (isFirstRun) {
             "Authenticate to create your encrypted ledger. The key is held in this " +
@@ -99,59 +100,57 @@ private fun LockedContent(
         } else {
             "Your ledger is encrypted. Authenticate to unlock it."
         },
-        fontSize = 14.sp,
+        style = MaterialTheme.typography.bodyMedium,
         textAlign = TextAlign.Center,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
 
     if (pendingCount > 0) {
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(Spacing.loose))
         Text(
             text = if (pendingCount == 1) {
                 "1 message arrived while you were away"
             } else {
                 "$pendingCount messages arrived while you were away"
             },
-            fontSize = 13.sp,
-            color = MaterialTheme.colorScheme.primary,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onPrimaryContainer,
             modifier = Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f))
-                .padding(horizontal = 14.dp, vertical = 8.dp)
+                .clip(MaterialTheme.shapes.small)
+                .background(MaterialTheme.colorScheme.primaryContainer)
+                .padding(horizontal = Spacing.snug, vertical = Spacing.tight)
         )
     }
 
     if (message != null) {
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(Spacing.loose))
         Text(
             text = message,
-            fontSize = 13.sp,
+            style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.error
         )
     }
 
-    Spacer(Modifier.height(36.dp))
+    Spacer(Modifier.height(Spacing.section))
     Button(
         onClick = onUnlock,
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.small
     ) {
         Icon(Icons.Default.Fingerprint, contentDescription = null, modifier = Modifier.size(20.dp))
-        Spacer(Modifier.height(0.dp))
-        Text(
-            text = if (isFirstRun) "  Create vault" else "  Unlock",
-            fontWeight = FontWeight.SemiBold
-        )
+        Spacer(Modifier.width(Spacing.tight))
+        Text(if (isFirstRun) "Create vault" else "Unlock")
     }
 }
 
 @Composable
 private fun UnlockingContent() {
     CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-    Spacer(Modifier.height(20.dp))
+    Spacer(Modifier.height(Spacing.loose))
     Text(
         text = "Opening the ledger and catching up on new messages…",
-        fontSize = 14.sp,
+        style = MaterialTheme.typography.bodyMedium,
         textAlign = TextAlign.Center,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
@@ -162,28 +161,32 @@ private fun NeedsLockContent(onOpenSecuritySettings: () -> Unit) {
     Icon(
         imageVector = Icons.Default.Warning,
         contentDescription = null,
-        tint = Color(0xFFFFA726),
+        tint = VaultTheme.semantics.caution,
         modifier = Modifier.size(56.dp)
     )
-    Spacer(Modifier.height(20.dp))
+    Spacer(Modifier.height(Spacing.loose))
     Text(
         text = "A screen lock is required",
-        fontSize = 20.sp,
-        fontWeight = FontWeight.Bold,
+        style = MaterialTheme.typography.headlineSmall,
+        textAlign = TextAlign.Center,
         color = MaterialTheme.colorScheme.onBackground
     )
-    Spacer(Modifier.height(12.dp))
+    Spacer(Modifier.height(Spacing.snug))
     Text(
         text = "Arth Vault seals your ledger with a key the secure hardware will only " +
             "release after you authenticate. With no PIN, pattern or biometric set, " +
             "there is nothing for it to check — and storing your finances unprotected " +
             "is not an option this app offers.",
-        fontSize = 14.sp,
+        style = MaterialTheme.typography.bodyMedium,
         textAlign = TextAlign.Center,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
-    Spacer(Modifier.height(28.dp))
-    Button(onClick = onOpenSecuritySettings, modifier = Modifier.fillMaxWidth()) {
+    Spacer(Modifier.height(Spacing.loose))
+    Button(
+        onClick = onOpenSecuritySettings,
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.small
+    ) {
         Text("Open security settings")
     }
 }
@@ -196,27 +199,28 @@ private fun InvalidatedContent(onDiscardVault: () -> Unit) {
         tint = MaterialTheme.colorScheme.error,
         modifier = Modifier.size(56.dp)
     )
-    Spacer(Modifier.height(20.dp))
+    Spacer(Modifier.height(Spacing.loose))
     Text(
         text = "The vault key is gone",
-        fontSize = 20.sp,
-        fontWeight = FontWeight.Bold,
+        style = MaterialTheme.typography.headlineSmall,
+        textAlign = TextAlign.Center,
         color = MaterialTheme.colorScheme.onBackground
     )
-    Spacer(Modifier.height(12.dp))
+    Spacer(Modifier.height(Spacing.snug))
     Text(
         text = "The secure hardware no longer holds the key that unlocks this ledger — " +
             "usually because the screen lock was removed or the device was reset. " +
             "The encrypted data cannot be recovered without it.\n\n" +
             "If you have a backup file, discard this vault and restore it afterwards.",
-        fontSize = 14.sp,
+        style = MaterialTheme.typography.bodyMedium,
         textAlign = TextAlign.Center,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
-    Spacer(Modifier.height(28.dp))
+    Spacer(Modifier.height(Spacing.loose))
     OutlinedButton(
         onClick = onDiscardVault,
         modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.small,
         colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
     ) {
         Text("Discard the unreadable vault")

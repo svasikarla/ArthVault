@@ -77,6 +77,13 @@ charges need at least three of them at a consistent interval and a stable price;
 a price rise has to repeat before it is called a hike. Every figure carries the
 transaction ids behind it, so tapping an insight shows the charges that produced it.
 
+Moving money between your own accounts is not spending, but your bank describes it
+exactly like a payment. Mark an account as yours under **Ingestion → My Accounts** and
+transfers to it stop counting as spend — and transfers *from* it stop counting as
+income, which is the same bug pointing the other way. Only accounts already seen in
+your ledger are offered, nothing is excluded until you say so, and the insights screen
+reports how much was left out so a mistake is visible rather than silent.
+
 You can also ask the ledger a question — "spend on fuel last quarter", "biggest
 charge this month", "how much did I earn last month". The grammar is deterministic
 and small: there is no model involved, and a question it cannot read is refused

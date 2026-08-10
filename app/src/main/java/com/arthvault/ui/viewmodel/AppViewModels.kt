@@ -4,8 +4,10 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.arthvault.data.analytics.PeriodScope
 import com.arthvault.data.local.entity.AdjustmentEntity
 import com.arthvault.data.local.entity.CategoryEntity
+import com.arthvault.data.local.entity.OwnAccountEntity
 import com.arthvault.data.local.entity.ParserRuleEntity
 import com.arthvault.data.local.entity.SenderAllowlistEntity
 import com.arthvault.data.local.entity.TransactionEntity
@@ -136,6 +138,26 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch { repository.removeAllowedSender(senderId) }
     }
 
+    // --- own accounts (v5) ---
+
+    val ownAccounts: StateFlow<List<OwnAccountEntity>> = repository.getOwnAccounts()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /**
+     * Account tails seen in the ledger, so the user picks from what exists rather
+     * than typing digits from memory and mistyping one.
+     */
+    val observedAccountTails: StateFlow<List<String>> = repository.getObservedAccountTails()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun markAccountAsOwn(tail: String, label: String) {
+        viewModelScope.launch { repository.markAccountAsOwn(tail, label) }
+    }
+
+    fun unmarkAccount(tail: String) {
+        viewModelScope.launch { repository.unmarkAccount(tail) }
+    }
+
     // --- F1.5 CSV import ---
 
     private val _importResult = MutableStateFlow<ImportResult?>(null)
@@ -155,13 +177,37 @@ class AnalyticsViewModel(application: Application) : AndroidViewModel(applicatio
     private val _analytics = MutableStateFlow(AnalyticsResult())
     val analytics: StateFlow<AnalyticsResult> = _analytics.asStateFlow()
 
+    /**
+     * The window the screen is scoped to.
+     *
+     * Everything used to be pinned to the current calendar month, so there was no way
+     * to ask what last month came to, or how this week compares to the last one.
+     */
+    private val _scope = MutableStateFlow(PeriodScope.THIS_MONTH)
+    val scope: StateFlow<PeriodScope> = _scope.asStateFlow()
+
+    /** True while a recomputation is in flight, so the screen can avoid flashing zeros. */
+    private val _isLoading = MutableStateFlow(false)
+    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+
     init {
+        refreshAnalytics()
+    }
+
+    fun setScope(scope: PeriodScope) {
+        if (_scope.value == scope) return
+        _scope.value = scope
         refreshAnalytics()
     }
 
     fun refreshAnalytics() {
         viewModelScope.launch {
-            _analytics.value = repository.computeAnalytics()
+            _isLoading.value = true
+            try {
+                _analytics.value = repository.computeAnalytics(_scope.value)
+            } finally {
+                _isLoading.value = false
+            }
         }
     }
 

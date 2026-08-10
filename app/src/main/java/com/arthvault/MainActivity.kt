@@ -16,6 +16,10 @@ import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.Input
 import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.outlined.Analytics
+import androidx.compose.material.icons.outlined.Input
+import androidx.compose.material.icons.outlined.ReceiptLong
+import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -56,11 +60,24 @@ import com.arthvault.ui.viewmodel.AnalyticsViewModel
 import com.arthvault.ui.viewmodel.LedgerViewModel
 import com.arthvault.ui.viewmodel.VaultViewModel
 
-sealed class Screen(val route: String, val title: String, val icon: ImageVector) {
-    object Ledger : Screen("ledger", "Ledger", Icons.Default.ReceiptLong)
-    object Analytics : Screen("analytics", "Analytics", Icons.Default.Analytics)
-    object Ingestion : Screen("ingestion", "Rules & Parse", Icons.Default.Input)
-    object Vault : Screen("vault", "Vault & Privacy", Icons.Default.Shield)
+/**
+ * Two icons per destination: outlined when inactive, filled when selected.
+ *
+ * Every icon in the app was `Icons.Default` (filled), so the navigation bar signalled
+ * the current destination with colour alone. Outlined-inactive / filled-active is the
+ * one place the iconography reference sanctions mixing the two styles, and it gives
+ * the state a second, non-colour signal.
+ */
+sealed class Screen(
+    val route: String,
+    val title: String,
+    val icon: ImageVector,
+    val selectedIcon: ImageVector,
+) {
+    object Ledger : Screen("ledger", "Ledger", Icons.Outlined.ReceiptLong, Icons.Filled.ReceiptLong)
+    object Analytics : Screen("analytics", "Analytics", Icons.Outlined.Analytics, Icons.Filled.Analytics)
+    object Ingestion : Screen("ingestion", "Rules", Icons.Outlined.Input, Icons.Filled.Input)
+    object Vault : Screen("vault", "Vault", Icons.Outlined.Shield, Icons.Filled.Shield)
 }
 
 /**
@@ -237,10 +254,16 @@ fun VaultLedgerApp() {
                 val currentRoute = navBackStackEntry?.destination?.route
 
                 screens.forEach { screen ->
+                    val selected = currentRoute == screen.route
                     NavigationBarItem(
-                        icon = { Icon(screen.icon, contentDescription = screen.title) },
+                        icon = {
+                            Icon(
+                                imageVector = if (selected) screen.selectedIcon else screen.icon,
+                                contentDescription = null,
+                            )
+                        },
                         label = { Text(screen.title) },
-                        selected = currentRoute == screen.route,
+                        selected = selected,
                         onClick = {
                             if (currentRoute != screen.route) {
                                 navController.navigate(screen.route) {

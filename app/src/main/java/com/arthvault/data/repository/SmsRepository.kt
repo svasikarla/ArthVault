@@ -3,11 +3,17 @@ package com.arthvault.data.repository
 import android.content.Context
 import android.net.Uri
 import android.provider.Telephony
+import com.arthvault.data.analytics.AnalyticsPeriod
 import com.arthvault.data.analytics.AnomalyItem
 import com.arthvault.data.analytics.CategorySlice
 import com.arthvault.data.analytics.CategoryTrend
+import com.arthvault.data.analytics.DayBucket
 import com.arthvault.data.analytics.FinanceAnalyticsEngine
+import com.arthvault.data.analytics.InternalTransferSummary
 import com.arthvault.data.analytics.MonthEndForecast
+import com.arthvault.data.analytics.PeriodResolver
+import com.arthvault.data.analytics.PeriodScope
+import com.arthvault.data.analytics.PeriodSummary
 import com.arthvault.data.analytics.RecurringItem
 import com.arthvault.data.backup.BackupCodec
 import com.arthvault.data.backup.BackupPayload
@@ -19,6 +25,7 @@ import com.arthvault.data.local.entity.AdjustmentSource
 import com.arthvault.data.local.entity.AppSettingEntity
 import com.arthvault.data.local.entity.CategoryEntity
 import com.arthvault.data.local.entity.MerchantRuleEntity
+import com.arthvault.data.local.entity.OwnAccountEntity
 import com.arthvault.data.local.entity.ParserRuleEntity
 import com.arthvault.data.local.entity.SenderAllowlistEntity
 import com.arthvault.data.local.entity.TransactionEntity
@@ -70,13 +77,29 @@ data class ImportResult(
 )
 
 data class AnalyticsResult(
+    /** The window every figure below is scoped to. */
+    val period: AnalyticsPeriod = PeriodResolver.resolve(PeriodScope.THIS_MONTH),
+    /** Income, spending and net for [period] — the three figures the screen leads with. */
+    val summary: PeriodSummary = PeriodSummary(0.0, 0.0, 0.0, 0.0, emptyList(), emptyList()),
+    /** The same three figures for the like-for-like earlier window. */
+    val comparisonSummary: PeriodSummary = PeriodSummary(0.0, 0.0, 0.0, 0.0, emptyList(), emptyList()),
+    /** Per-day totals across [period], zero-filled, for the daily chart. */
+    val dailyTotals: List<DayBucket> = emptyList(),
+    /** Per-day totals across the comparison window, for the pace line. */
+    val comparisonDailyTotals: List<DayBucket> = emptyList(),
     val recurring: List<RecurringItem> = emptyList(),
+    /** Recurring income on an established cadence — salary, rent received, a pension. */
+    val recurringIncome: List<RecurringItem> = emptyList(),
+    /** Only populated when [period] is the current month; nothing else can be forecast. */
     val forecast: MonthEndForecast? = null,
     val anomalies: List<AnomalyItem> = emptyList(),
     val duplicates: List<TransactionEntity> = emptyList(),
     val categoryBreakdown: List<CategorySlice> = emptyList(),
-    /** F3.6 — this month against last, largest movement first. */
-    val categoryTrends: List<CategoryTrend> = emptyList()
+    /** F3.6 — [period] against the like-for-like earlier window, largest movement first. */
+    val categoryTrends: List<CategoryTrend> = emptyList(),
+    /** What was left out of the figures above because it was the user's own money. */
+    val internalTransfers: InternalTransferSummary =
+        InternalTransferSummary(0, 0.0, 0.0, emptyList())
 )
 
 class SmsRepository(private val context: Context) {
@@ -92,8 +115,19 @@ class SmsRepository(private val context: Context) {
     private val senderAllowlistDao = db.senderAllowlistDao()
     private val adjustmentDao = db.adjustmentDao()
     private val appSettingDao = db.appSettingDao()
+    private val ownAccountDao = db.ownAccountDao()
 
     private val parserEngine = SmsParserEngine()
+
+    /**
+     * Analytics that know nothing about which accounts are the user's own.
+     *
+     * Used only where that cannot matter. Anything that produces a spend or income
+     * figure builds its own engine from the current own-account set — see
+     * [computeAnalytics] — because the set changes while the app is running and a
+     * cached engine would keep excluding, or keep counting, an account the user just
+     * changed their mind about.
+     */
     private val analyticsEngine = FinanceAnalyticsEngine()
 
     /**
@@ -564,32 +598,80 @@ class SmsRepository(private val context: Context) {
      * rows — transactions stay immutable (T3.3), and there is no flag column to
      * fall out of sync with the data.
      */
-    suspend fun computeAnalytics(): AnalyticsResult = withContext(Dispatchers.IO) {
+    suspend fun computeAnalytics(
+        scope: PeriodScope = PeriodScope.THIS_MONTH,
+        now: Long = System.currentTimeMillis()
+    ): AnalyticsResult = withContext(Dispatchers.IO) {
         // The folded ledger, not the stored rows. Reading `transactionDao` directly —
         // as this used to — meant every correction and every voided transaction was
         // invisible to analytics: a transaction the user had removed still counted
         // towards the spend total, the donut and the forecast, while the ledger
         // screen right next to it showed it gone.
         val txns = getAllTransactions().first()
-        val monthRange = analyticsEngine.currentMonthRange()
+
+        // Built per call from the current set. Moving money between your own accounts
+        // is not spending, and the receiving leg is not income; the engine can only
+        // know that if it is told which accounts are yours.
+        val engine = FinanceAnalyticsEngine(ownAccountDao.getTails().toSet())
+        val period = PeriodResolver.resolve(scope, now)
 
         return@withContext AnalyticsResult(
-            recurring = analyticsEngine.detectRecurringAndPriceHikes(txns),
-            forecast = analyticsEngine.computeMonthEndForecast(txns),
-            anomalies = analyticsEngine.detectAnomalies(txns),
-            duplicates = analyticsEngine.detectDuplicates(txns),
-            categoryBreakdown = analyticsEngine.computeCategoryBreakdown(
+            period = period,
+            summary = engine.computePeriodSummary(txns, period.range),
+            comparisonSummary = engine.computePeriodSummary(txns, period.comparison),
+            dailyTotals = engine.computeDailyTotals(txns, period.range),
+            comparisonDailyTotals = engine.computeDailyTotals(txns, period.comparison),
+            recurring = engine.detectRecurringAndPriceHikes(txns),
+            recurringIncome = engine.detectRecurringIncome(txns),
+            // A forecast only means something for a window that is still filling.
+            // Offering one for a month that has already ended is a projection of the
+            // past, which is a contradiction the screen should not have to explain.
+            forecast = if (scope == PeriodScope.THIS_MONTH) {
+                engine.computeMonthEndForecast(txns, now)
+            } else {
+                null
+            },
+            // Detection still runs over the whole ledger — a category needs all its
+            // history to know what normal costs — but only findings inside the window
+            // are reported. Otherwise these lists only ever grew.
+            anomalies = engine.detectAnomalies(txns, reportRange = period.range),
+            duplicates = engine.detectDuplicates(txns, reportRange = period.range),
+            categoryBreakdown = engine.computeCategoryBreakdown(
                 transactions = txns,
-                rangeStart = monthRange.first,
-                rangeEnd = monthRange.last
+                rangeStart = period.range.first,
+                rangeEnd = period.range.last
             ),
-            // F3.6 — this month against last, largest movement first.
-            categoryTrends = analyticsEngine.compareCategories(
+            // F3.6 — against the *like-for-like* earlier window. This used to compare
+            // a month-to-date total against a whole previous month, so on the 3rd of
+            // the month it reported that spending had collapsed in every category.
+            categoryTrends = engine.compareCategories(
                 transactions = txns,
-                periodA = analyticsEngine.previousMonthRange(),
-                periodB = monthRange
+                periodA = period.comparison,
+                periodB = period.range
+            ),
+            // Shown on screen rather than silently netted away: see
+            // InternalTransferSummary.
+            internalTransfers = engine.summariseInternalTransfers(
+                transactions = txns,
+                rangeStart = period.range.first,
+                rangeEnd = period.range.last
             )
         )
+    }
+
+    // --- own accounts (v5) ---
+
+    fun getOwnAccounts(): Flow<List<OwnAccountEntity>> = ownAccountDao.getAll()
+
+    /** Account tails the parser has actually seen — the candidates worth offering. */
+    fun getObservedAccountTails(): Flow<List<String>> = ownAccountDao.getObservedTails()
+
+    suspend fun markAccountAsOwn(tail: String, label: String) = withContext(Dispatchers.IO) {
+        ownAccountDao.upsert(OwnAccountEntity(tail = tail.trim(), label = label.trim()))
+    }
+
+    suspend fun unmarkAccount(tail: String) = withContext(Dispatchers.IO) {
+        ownAccountDao.delete(tail)
     }
 
     /**
@@ -685,7 +767,8 @@ class SmsRepository(private val context: Context) {
                     merchantRules = merchantRuleDao.getAllRulesList(),
                     customCategories = categoryDao.getAllCategories().first().filter { it.isCustom },
                     customParserRules = parserRuleDao.getActiveRulesList().filter { !it.isSystemRule },
-                    senderAllowlist = senderAllowlistDao.getAll().first()
+                    senderAllowlist = senderAllowlistDao.getAll().first(),
+                    ownAccounts = ownAccountDao.getAll().first()
                 )
                 val bytes = BackupCodec.encode(payload, passphrase)
                 context.contentResolver.openOutputStream(uri, "wt")?.use { it.write(bytes) }
@@ -725,6 +808,10 @@ class SmsRepository(private val context: Context) {
                 payload.customCategories.forEach { categoryDao.insertCategory(it) }
                 payload.customParserRules.forEach { parserRuleDao.insertRule(it) }
                 senderAllowlistDao.insertDefaults(payload.senderAllowlist)
+                // Without these the restored ledger would count every own-account
+                // transfer as spending again, and disagree with the ledger the
+                // backup was taken from.
+                payload.ownAccounts.forEach { ownAccountDao.upsert(it) }
 
                 RestoreResult(
                     transactionsRestored = fresh.size,
@@ -748,6 +835,9 @@ class SmsRepository(private val context: Context) {
         merchantRuleDao.deleteAllRules()
         parserRuleDao.deleteAllCustomRules()
         categoryDao.deleteCustomCategories()
+        // F5.2 — these are account numbers the user told us about. A wipe that left
+        // them behind would leave a record of which accounts they hold.
+        ownAccountDao.deleteAll()
         PendingIngestMarker.clear(context)
 
         File(context.cacheDir, "exports").listFiles()?.forEach { it.delete() }

@@ -8,6 +8,7 @@ import com.arthvault.data.local.entity.AdjustmentEntity
 import com.arthvault.data.local.entity.AppSettingEntity
 import com.arthvault.data.local.entity.CategoryEntity
 import com.arthvault.data.local.entity.MerchantRuleEntity
+import com.arthvault.data.local.entity.OwnAccountEntity
 import com.arthvault.data.local.entity.ParserRuleEntity
 import com.arthvault.data.local.entity.SenderAllowlistEntity
 import com.arthvault.data.local.entity.TransactionEntity
@@ -96,6 +97,36 @@ interface SenderAllowlistDao {
 
     @Query("DELETE FROM sender_allowlist WHERE senderId = :senderId")
     suspend fun delete(senderId: String)
+}
+
+@Dao
+interface OwnAccountDao {
+    @Query("SELECT * FROM own_accounts ORDER BY tail")
+    fun getAll(): Flow<List<OwnAccountEntity>>
+
+    @Query("SELECT tail FROM own_accounts")
+    suspend fun getTails(): List<String>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(account: OwnAccountEntity)
+
+    @Query("DELETE FROM own_accounts WHERE tail = :tail")
+    suspend fun delete(tail: String)
+
+    /** F5.2 — part of the full local wipe. */
+    @Query("DELETE FROM own_accounts")
+    suspend fun deleteAll()
+
+    /**
+     * Account tails the parser has actually seen, most-used first — the candidate
+     * list the settings screen offers. Derived from the ledger rather than stored,
+     * so a newly appearing account shows up without any bookkeeping.
+     */
+    @Query(
+        "SELECT accountTail FROM transactions WHERE accountTail IS NOT NULL " +
+            "GROUP BY accountTail ORDER BY COUNT(*) DESC"
+    )
+    fun getObservedTails(): Flow<List<String>>
 }
 
 @Dao

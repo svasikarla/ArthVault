@@ -5,6 +5,7 @@ import com.arthvault.data.backup.BackupFormatException
 import com.arthvault.data.backup.BackupPayload
 import com.arthvault.data.local.entity.CategoryEntity
 import com.arthvault.data.local.entity.MerchantRuleEntity
+import com.arthvault.data.local.entity.OwnAccountEntity
 import com.arthvault.data.local.entity.STATUS_FAILED
 import com.arthvault.data.local.entity.SenderAllowlistEntity
 import com.arthvault.data.local.entity.TransactionEntity
@@ -59,7 +60,8 @@ class BackupCodecTest {
         ),
         merchantRules = listOf(MerchantRuleEntity("SWIGGY", "Food & Dining", 42L)),
         customCategories = listOf(CategoryEntity("Aquarium", "Pets", "#00BCD4", isCustom = true)),
-        senderAllowlist = listOf(SenderAllowlistEntity("HDFCBK", "HDFC Bank"))
+        senderAllowlist = listOf(SenderAllowlistEntity("HDFCBK", "HDFC Bank")),
+        ownAccounts = listOf(OwnAccountEntity("0662", "HDFC Current", 99L))
     )
 
     private val passphrase = "correct horse battery".toCharArray()
@@ -72,6 +74,30 @@ class BackupCodecTest {
         assertEquals(1, restored.merchantRules.size)
         assertEquals(1, restored.customCategories.size)
         assertEquals(1, restored.senderAllowlist.size)
+        assertEquals(1, restored.ownAccounts.size)
+    }
+
+    @Test
+    fun `own accounts survive so a restore does not restate the totals`() {
+        val restored = BackupCodec.decode(BackupCodec.encode(payload, passphrase), passphrase)
+
+        // Drop these and every own-account transfer counts as spending again, so the
+        // restored ledger silently disagrees with the one that was backed up.
+        val account = restored.ownAccounts.single()
+        assertEquals("0662", account.tail)
+        assertEquals("HDFC Current", account.label)
+        assertEquals(99L, account.markedAt)
+    }
+
+    @Test
+    fun `a backup written before v5 restores as no marked accounts`() {
+        // Forward compatibility in the direction that actually happens: an older file
+        // opened by a newer app. Absent means "none marked", which is exactly the
+        // state that install was in.
+        val legacy = BackupCodec.fromJson(
+            BackupCodec.toJson(payload.copy(ownAccounts = emptyList()))
+        )
+        assertTrue(legacy.ownAccounts.isEmpty())
     }
 
     @Test
