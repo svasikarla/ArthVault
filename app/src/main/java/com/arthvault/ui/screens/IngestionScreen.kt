@@ -19,18 +19,18 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountBalance
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.FilterAlt
-import androidx.compose.material.icons.filled.Input
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.QrCodeScanner
-import androidx.compose.material.icons.filled.Rule
-import androidx.compose.material.icons.filled.UploadFile
+import androidx.compose.material.icons.outlined.AccountBalance
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.FilterAlt
+import androidx.compose.material.icons.outlined.Category
+import androidx.compose.material.icons.outlined.Input
+import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.QrCodeScanner
+import androidx.compose.material.icons.outlined.Rule
+import androidx.compose.material.icons.outlined.UploadFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -48,9 +48,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.arthvault.data.local.AddCategoryOutcome
+import com.arthvault.data.local.CategoryEditor
+import com.arthvault.data.local.DeleteCategoryOutcome
 import com.arthvault.data.parser.SmsParserEngine
 import com.arthvault.data.parser.rules.ParserRuleSeeder
 import com.arthvault.data.parser.rules.RuleLoadResult
+import com.arthvault.ui.components.BarAction
 import com.arthvault.ui.components.CardHeading
 import com.arthvault.ui.components.LocalSnackbar
 import com.arthvault.ui.components.VaultCard
@@ -78,12 +82,19 @@ fun IngestionScreen(
     var newSenderId by remember { mutableStateOf("") }
     var newSenderLabel by remember { mutableStateOf("") }
 
+    var showAddCategoryDialog by remember { mutableStateOf(false) }
+    // The category awaiting confirmation, and why it might be refused. Removing one is
+    // only ever offered for the user's own, and only goes through if nothing relies on it.
+    var pendingCategoryDelete by remember { mutableStateOf<String?>(null) }
+    var categoryDeleteRefusal by remember { mutableStateOf<String?>(null) }
+
     // The tail awaiting a name. Marking an account changes what counts as spending,
     // so it goes through a dialog rather than happening on tap.
     var pendingOwnAccountTail by remember { mutableStateOf<String?>(null) }
     var newAccountLabel by remember { mutableStateOf("") }
 
     val activeRules by vaultViewModel.activeParserRules.collectAsState()
+    val categories by ledgerViewModel.categories.collectAsState()
     val allowedSenders by ledgerViewModel.allowedSenders.collectAsState()
     val ownAccounts by ledgerViewModel.ownAccounts.collectAsState()
     val observedTails by ledgerViewModel.observedAccountTails.collectAsState()
@@ -147,7 +158,7 @@ fun IngestionScreen(
                 VaultCard {
                     CardHeading(
                         title = "Test a message",
-                        icon = Icons.Default.Input,
+                        icon = Icons.Outlined.Input,
                         iconTint = MaterialTheme.colorScheme.primary,
                         subtitle = "Paste a bank SMS to see how the live rules read it."
                     )
@@ -195,7 +206,7 @@ fun IngestionScreen(
                             modifier = Modifier.weight(1f),
                             shape = MaterialTheme.shapes.small
                         ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Outlined.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(Spacing.hairline))
                             Text("Test")
                         }
@@ -259,7 +270,7 @@ fun IngestionScreen(
                             onClick = { showAddRuleDialog = true },
                             shape = MaterialTheme.shapes.small
                         ) {
-                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Outlined.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(Spacing.hairline))
                             Text("Add your own")
                         }
@@ -271,7 +282,7 @@ fun IngestionScreen(
                 VaultRowCard(modifier = Modifier.animateItem()) {
                     CardHeading(
                         title = rule.ruleName,
-                        icon = Icons.Default.Rule,
+                        icon = Icons.Outlined.Rule,
                         iconTint = semantics.info
                     )
                     Spacer(modifier = Modifier.height(Spacing.tight))
@@ -289,12 +300,52 @@ fun IngestionScreen(
                 }
             }
 
+            // Categories. They belong on this screen because the merchant rules above
+            // are what assign them: a new category is only ever applied by hand or by
+            // a rule, never inferred, and this is where both are managed.
+            item {
+                VaultCard {
+                    CardHeading(
+                        title = "Categories (${categories.size})",
+                        icon = Icons.Outlined.Category,
+                        iconTint = semantics.info,
+                        subtitle = "Your own categories sit alongside the built-in ones. " +
+                            "A new category is never guessed — it applies when you pick it " +
+                            "for a transaction, and from then on to that merchant if you " +
+                            "asked it to."
+                    )
+                    Spacer(modifier = Modifier.height(Spacing.snug))
+                    OutlinedButton(
+                        onClick = { showAddCategoryDialog = true },
+                        shape = MaterialTheme.shapes.small
+                    ) {
+                        Icon(Icons.Outlined.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(Spacing.hairline))
+                        Text("Add category")
+                    }
+                    Spacer(modifier = Modifier.height(Spacing.tight))
+                    categories.forEach { category ->
+                        ListRow(
+                            primary = category.name,
+                            secondary = if (category.isCustom) "Yours" else "Built in",
+                            // Built-in categories are re-seeded after a wipe, so
+                            // "removing" one would only make it come back.
+                            actionLabel = if (category.isCustom) "Remove" else "",
+                            destructive = true,
+                            onAction = {
+                                if (category.isCustom) pendingCategoryDelete = category.name
+                            }
+                        )
+                    }
+                }
+            }
+
             // F1.1 — sender allowlist
             item {
                 VaultCard {
                     CardHeading(
                         title = "Bank senders (${allowedSenders.size})",
-                        icon = Icons.Default.FilterAlt,
+                        icon = Icons.Outlined.FilterAlt,
                         iconTint = semantics.info,
                         subtitle = "Only messages from these senders are read. Everything else " +
                             "in your inbox is ignored entirely. Sender IDs are matched on the " +
@@ -305,7 +356,7 @@ fun IngestionScreen(
                         onClick = { showAddSenderDialog = true },
                         shape = MaterialTheme.shapes.small
                     ) {
-                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Outlined.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(Spacing.hairline))
                         Text("Add sender")
                     }
@@ -334,7 +385,7 @@ fun IngestionScreen(
                 VaultCard {
                     CardHeading(
                         title = "My accounts (${ownAccounts.size})",
-                        icon = Icons.Default.AccountBalance,
+                        icon = Icons.Outlined.AccountBalance,
                         iconTint = semantics.positive,
                         subtitle = "Moving money between your own accounts is not spending, but " +
                             "your bank describes it exactly like a payment. Mark an account here " +
@@ -393,7 +444,7 @@ fun IngestionScreen(
                 VaultCard {
                     CardHeading(
                         title = "Import a CSV",
-                        icon = Icons.Default.UploadFile,
+                        icon = Icons.Outlined.UploadFile,
                         iconTint = semantics.positive,
                         subtitle = "Bring in cash entries and gaps from a spreadsheet. Expects the " +
                             "same columns Arth Vault exports, so an export re-imports cleanly."
@@ -552,6 +603,88 @@ fun IngestionScreen(
         )
     }
 
+    if (showAddCategoryDialog) {
+        AddCategoryDialog(
+            existing = categories.map { it.name },
+            onDismiss = { showAddCategoryDialog = false },
+            onCreate = { name ->
+                ledgerViewModel.addCategory(name) { }
+                showAddCategoryDialog = false
+            }
+        )
+    }
+
+    pendingCategoryDelete?.let { name ->
+        AlertDialog(
+            onDismissRequest = { pendingCategoryDelete = null },
+            shape = MaterialTheme.shapes.extraLarge,
+            title = { Text("Remove \"$name\"?") },
+            text = {
+                Text(
+                    "It disappears from the filters and from the recategorize list. " +
+                        "Nothing in your ledger changes.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        ledgerViewModel.deleteCategory(name) { outcome ->
+                            // Refused rather than cascaded: rewriting the transactions
+                            // that use it to something else would be editing what the
+                            // bank said (T3.3), and leaving them pointing at a category
+                            // that no longer exists makes them unfilterable.
+                            categoryDeleteRefusal = when (outcome) {
+                                is DeleteCategoryOutcome.StillInUse -> buildString {
+                                    append("\"$name\" is still in use by ")
+                                    val parts = buildList {
+                                        if (outcome.transactions > 0) {
+                                            add(
+                                                if (outcome.transactions == 1) "1 transaction"
+                                                else "${outcome.transactions} transactions"
+                                            )
+                                        }
+                                        if (outcome.rules > 0) {
+                                            add(
+                                                if (outcome.rules == 1) "1 merchant rule"
+                                                else "${outcome.rules} merchant rules"
+                                            )
+                                        }
+                                    }
+                                    append(parts.joinToString(" and "))
+                                    append(". Move them to another category first.")
+                                }
+                                DeleteCategoryOutcome.BuiltIn ->
+                                    "\"$name\" is built in and is restored after a wipe."
+                                DeleteCategoryOutcome.NotFound -> null
+                                DeleteCategoryOutcome.Deleted -> null
+                            }
+                        }
+                        pendingCategoryDelete = null
+                    }
+                ) {
+                    Text("Remove", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingCategoryDelete = null }) { Text("Keep") }
+            }
+        )
+    }
+
+    categoryDeleteRefusal?.let { message ->
+        AlertDialog(
+            onDismissRequest = { categoryDeleteRefusal = null },
+            shape = MaterialTheme.shapes.extraLarge,
+            title = { Text("Still in use") },
+            text = { Text(message, style = MaterialTheme.typography.bodyMedium) },
+            confirmButton = {
+                TextButton(onClick = { categoryDeleteRefusal = null }) { Text("OK") }
+            }
+        )
+    }
+
     pendingOwnAccountTail?.let { tail ->
         AlertDialog(
             onDismissRequest = { pendingOwnAccountTail = null; newAccountLabel = "" },
@@ -609,6 +742,7 @@ fun IngestionScreen(
 private fun ListRow(
     primary: String,
     secondary: String?,
+    /** Blank leaves the row with no trailing control, rather than an empty button. */
     actionLabel: String,
     destructive: Boolean,
     onAction: () -> Unit
@@ -630,17 +764,79 @@ private fun ListRow(
                 )
             }
         }
-        TextButton(onClick = onAction) {
-            Text(
-                actionLabel,
-                color = if (destructive) {
-                    MaterialTheme.colorScheme.error
-                } else {
-                    MaterialTheme.colorScheme.primary
-                }
-            )
+        if (actionLabel.isNotBlank()) {
+            TextButton(onClick = onAction) {
+                Text(
+                    actionLabel,
+                    color = if (destructive) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    }
+                )
+            }
         }
     }
+}
+
+/**
+ * Naming a new category, with the reason a name is refused shown under the field.
+ *
+ * The same [CategoryEditor] the repository uses, so "Grocery already exists" appears
+ * as it is typed rather than after the dialog closes on an insert that quietly
+ * overwrote the built-in row.
+ */
+@Composable
+private fun AddCategoryDialog(
+    existing: List<String>,
+    onDismiss: () -> Unit,
+    onCreate: (String) -> Unit
+) {
+    var name by remember { mutableStateOf("") }
+
+    val validation = remember(name, existing) {
+        if (name.isBlank()) null else CategoryEditor.validateNew(name, existing)
+    }
+    val problem = when (validation) {
+        is AddCategoryOutcome.AlreadyExists -> "\"${validation.existing}\" already exists"
+        is AddCategoryOutcome.TooLong -> "Keep it under ${validation.limit} characters"
+        else -> null
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = MaterialTheme.shapes.extraLarge,
+        title = { Text("Add a category") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.snug)) {
+                Text(
+                    "Nothing is recategorised automatically. This becomes available " +
+                        "wherever you pick a category, and sticks to a merchant once " +
+                        "you apply it to all of that merchant's transactions.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Category name") },
+                    placeholder = { Text("Pet Care") },
+                    singleLine = true,
+                    isError = problem != null,
+                    supportingText = problem?.let { { Text(it) } },
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onCreate(name) },
+                enabled = validation is AddCategoryOutcome.Added
+            ) { Text("Add") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 /** Scanning the inbox, shared with the Ledger screen's app bar. */
@@ -672,15 +868,15 @@ private fun ScanInboxAction(viewModel: LedgerViewModel) {
         }
     }
 
-    IconButton(
+    BarAction(
+        label = "Scan SMS",
+        icon = Icons.Outlined.QrCodeScanner,
         onClick = {
             val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) ==
                 PackageManager.PERMISSION_GRANTED
             if (granted) runScan() else permissionLauncher.launch(Manifest.permission.READ_SMS)
         }
-    ) {
-        Icon(Icons.Default.QrCodeScanner, contentDescription = "Scan SMS inbox")
-    }
+    )
 }
 
 @Composable

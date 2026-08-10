@@ -16,9 +16,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Savings
-import androidx.compose.material.icons.filled.ShowChart
-import androidx.compose.material.icons.filled.TrendingUp
+import androidx.compose.material.icons.outlined.Savings
+import androidx.compose.material.icons.outlined.ShowChart
+import androidx.compose.material.icons.outlined.TrendingUp
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -109,9 +109,17 @@ fun CashPositionCard(
     comparison: PeriodSummary,
     forecast: MonthEndForecast?,
     onShowIncome: () -> Unit,
-    onShowSpend: () -> Unit
+    onShowSpend: () -> Unit,
+    /**
+     * Carries the brand accent, marking this as the screen's one focal card.
+     *
+     * Off by default so the render tests and any future reuse get the neutral card.
+     * The accent is a hierarchy signal here, not a status one — everything semantic on
+     * this card (the figures, the bar, the forecast) is already coloured by meaning.
+     */
+    accented: Boolean = false
 ) {
-    VaultCard {
+    VaultCard(accent = if (accented) MaterialTheme.colorScheme.primary else null) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -334,7 +342,7 @@ private fun ForecastSection(forecast: MonthEndForecast) {
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
-                Icons.Default.Savings,
+                Icons.Outlined.Savings,
                 contentDescription = null,
                 tint = semantics.info,
                 modifier = Modifier.size(18.dp)
@@ -467,7 +475,7 @@ fun SpendPaceChart(
     ChartCard(
         title = "Spending pace",
         subtitle = "${period.label} against ${period.comparisonLabel}",
-        icon = Icons.Default.TrendingUp
+        icon = Icons.Outlined.TrendingUp
     ) {
         Canvas(
             modifier = Modifier
@@ -548,7 +556,7 @@ fun DailySpendChart(buckets: List<DayBucket>) {
     ChartCard(
         title = "Daily spending",
         subtitle = "${spendingDays.size} of ${buckets.size} days had spending",
-        icon = Icons.Default.ShowChart
+        icon = Icons.Outlined.ShowChart
     ) {
         Canvas(
             modifier = Modifier

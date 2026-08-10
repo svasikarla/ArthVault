@@ -214,4 +214,15 @@ interface CategoryDao {
     /** Only user-created categories; the built-in set is not user data. */
     @Query("DELETE FROM categories WHERE isCustom = 1")
     suspend fun deleteCustomCategories()
+
+    /**
+     * Removes one user-created category.
+     *
+     * `isCustom = 1` is in the WHERE rather than left to the caller: a built-in
+     * category is re-seeded on every wipe, so deleting one produces a row that comes
+     * back by itself. See [com.arthvault.data.local.CategoryEditor.canDelete] for the
+     * checks that run before this is reached.
+     */
+    @Query("DELETE FROM categories WHERE name = :name AND isCustom = 1")
+    suspend fun deleteCustomCategory(name: String)
 }

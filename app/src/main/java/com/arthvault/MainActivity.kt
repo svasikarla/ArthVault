@@ -7,6 +7,10 @@ import android.provider.Settings
 import android.view.WindowManager
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.layout.fillMaxSize
@@ -47,6 +51,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.arthvault.ui.components.Motion
+import com.arthvault.ui.components.reduceMotion
 import com.arthvault.ui.screens.AnalyticsScreen
 import com.arthvault.ui.screens.IngestionScreen
 import com.arthvault.ui.screens.LedgerScreen
@@ -281,9 +287,25 @@ fun VaultLedgerApp() {
             }
         }
     ) { innerPadding ->
+        // Fade-through, the M3 transition for destinations that are peers rather than
+        // parent and child: the outgoing screen leaves quickly, the incoming one fades
+        // up from 94%. The four destinations used to hard-cut, which made every tab
+        // switch read as a separate app rather than a move within one.
+        //
+        // Zero-duration when the user has asked the system to stop animating. A
+        // transition they declined is one that costs them.
+        val reduced = reduceMotion()
+        val enterMillis = if (reduced) 0 else Motion.STANDARD
+        val exitMillis = if (reduced) 0 else Motion.QUICK
+
         NavHost(
             navController = navController,
             startDestination = Screen.Ledger.route,
+            enterTransition = {
+                fadeIn(tween(enterMillis)) +
+                    scaleIn(initialScale = 0.94f, animationSpec = tween(enterMillis))
+            },
+            exitTransition = { fadeOut(tween(exitMillis)) },
             modifier = Modifier.padding(innerPadding)
         ) {
             composable(Screen.Ledger.route) {

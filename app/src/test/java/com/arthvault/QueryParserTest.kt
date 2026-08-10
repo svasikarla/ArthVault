@@ -181,6 +181,28 @@ class QueryParserTest {
     }
 
     @Test
+    fun `a card bill payment is neither income nor spending`() {
+        // Both legs, because the query engine is a second definition of income and
+        // the analytics fix does not reach it.
+        val txns = listOf(
+            txn(50000.0, "SALARY", direction = "CREDIT", txnType = TxnType.INCOME, daysAgo = 5, id = 1),
+            txn(12400.0, "ICICI Bank Credit", direction = "CREDIT",
+                txnType = TxnType.CARD_PAYMENT, daysAgo = 3, id = 2),
+            txn(900.0, "SWIGGY", "Food & Dining", daysAgo = 2, id = 3),
+            txn(12400.0, "ICICI CREDIT CARD", "Transfers",
+                txnType = TxnType.CARD_PAYMENT, daysAgo = 2, id = 4)
+        )
+
+        val earned = engine.run(parser.parse("how much did I earn", now)!!, txns)
+        assertEquals(50000.0, earned.value, 0.001)
+        assertEquals(listOf(1L), earned.transactionIds)
+
+        val spent = engine.run(parser.parse("how much did I spend", now)!!, txns)
+        assertEquals(900.0, spent.value, 0.001)
+        assertEquals(listOf(3L), spent.transactionIds)
+    }
+
+    @Test
     fun `largest returns only the winning row as evidence`() {
         val txns = listOf(
             txn(1000.0, "SHELL", "Transport & Fuel", daysAgo = 2, id = 1),

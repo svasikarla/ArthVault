@@ -374,6 +374,63 @@ class FinanceAnalyticsEngineTest {
         assertEquals(listOf(1L, 2L), summary.transactionIds)
     }
 
+    @Test
+    fun `a card bill payment inflates neither spending nor income`() {
+        // The double count this exists to stop: the swipe is already in the ledger
+        // (card senders are allowlisted by default), so the bank leg that settles the
+        // bill is the same rupees a second time, and the card's acknowledgement is the
+        // same rupees a third time with the sign flipped.
+        val noAccountsMarked = FinanceAnalyticsEngine()
+        val txns = listOf(
+            txn(1899.0, "ZOMATO", "Food & Dining", id = 1),
+            txn(12400.0, "ICICI CREDIT CARD", "Transfers",
+                txnType = TxnType.CARD_PAYMENT, id = 2),
+            txn(12400.0, "ICICI Bank Credit", "Transfers", direction = "CREDIT",
+                txnType = TxnType.CARD_PAYMENT, id = 3),
+            txn(60000.0, "ACME PAYROLL", "Income", direction = "CREDIT",
+                txnType = TxnType.INCOME, id = 4)
+        )
+
+        val forecast = noAccountsMarked.computeMonthEndForecast(txns)
+
+        assertEquals(1899.0, forecast.totalSpentSoFar, 0.001)
+        assertEquals(60000.0, forecast.totalIncomeSoFar, 0.001)
+    }
+
+    @Test
+    fun `a card payment is excluded without the user confirming an account`() {
+        // Unlike an internal transfer, this needs no own-account confirmation: there
+        // is no counterparty tail to confirm, because neither leg names both sides.
+        val noAccountsMarked = FinanceAnalyticsEngine()
+        val cardPayment = txn(
+            12400.0, "ICICI CREDIT CARD", "Transfers", txnType = TxnType.CARD_PAYMENT, id = 1
+        )
+
+        assertTrue(noAccountsMarked.isOwnMoneyMovement(cardPayment))
+        assertTrue(
+            "isInternalTransfer keeps its narrower meaning",
+            !noAccountsMarked.isInternalTransfer(cardPayment)
+        )
+    }
+
+    @Test
+    fun `an excluded card payment is reported, not silently netted away`() {
+        val mine = FinanceAnalyticsEngine()
+        val txns = listOf(
+            txn(12400.0, "ICICI CREDIT CARD", "Transfers",
+                txnType = TxnType.CARD_PAYMENT, id = 1),
+            txn(500.0, "SWIGGY", "Food & Dining", id = 2)
+        )
+
+        val summary = mine.summariseInternalTransfers(txns, now - 30 * day, now + day)
+
+        // The user whose card alerts are not being ingested has to be able to see
+        // what left their spending, since nothing asked them to confirm it.
+        assertEquals(1, summary.count)
+        assertEquals(12400.0, summary.outflowTotal, 0.001)
+        assertEquals(listOf(1L), summary.transactionIds)
+    }
+
     // --- period summary, day buckets and the cash position ---------------
 
     @Test

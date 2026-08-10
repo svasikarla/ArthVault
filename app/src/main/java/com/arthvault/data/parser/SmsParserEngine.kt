@@ -66,6 +66,35 @@ class SmsParserEngine {
         private val FEE_WORD = Regex("(?i)\\b(?:fee|fees|charges)\\b")
 
         /**
+         * Anchored for the same reason [FEE_WORD] and [CASH_WORD] are: as a bare
+         * substring "emi" is inside "reminder", so every payment reminder was typed as
+         * a loan instalment. "premium" and "system" hit it too.
+         */
+        private val EMI_WORD = Regex("(?i)\\b(?:emi|emis|instal?lments?)\\b")
+
+        /**
+         * Settling a card bill, from either side of it.
+         *
+         * The bank leg reads "debited from Acct XX635 for ICICI CREDIT CARD PAYMENT"
+         * and the card leg reads "Payment of Rs 2,783.00 received towards ICICI Bank
+         * Credit Card XX7009". Both were ordinary transactions: the first a ₹12,400
+         * purchase, the second ₹2,783 of income. Since card senders are allowlisted by
+         * default the swipes are already in the ledger, so that is the same money
+         * counted two and three times over.
+         *
+         * The "payment ... towards ... credit card" arm has to tolerate the decimal
+         * point in "Rs 2,783.00" sitting between the two anchors, which is why the gap
+         * is a character class rather than `[^.]`. A purchase *made on* a card is not
+         * matched: it names no payment towards the card.
+         */
+        private val CARD_BILL_PAYMENT = Regex(
+            "(?i)(?:\\bcredit\\s+card\\s+(?:bill\\s+)?payment\\b|" +
+                "\\bcard\\s+bill(?:\\s+payment)?\\b|" +
+                "\\b(?:payment|paid|repayment)\\b[\\w\\s.,₹()/-]{0,60}?" +
+                "\\b(?:towards|to)\\b[\\w\\s.,₹()/-]{0,40}?\\bcredit\\s+card\\b)"
+        )
+
+        /**
          * Messages that quote money but describe no transaction.
          *
          * An OTP for a pending payment and a pre-approved-loan advert both name an
@@ -77,6 +106,51 @@ class SmsParserEngine {
         private val NON_TRANSACTIONAL = Regex(
             "(?i)\\b(?:otp|one[\\s-]?time\\s+password|verification\\s+code|passcode|" +
                 "pre-?approved|apply\\s+now|click\\s+(?:here|to)|offer\\s+valid|know\\s+more)\\b"
+        )
+
+        /**
+         * A bill that is *owed*, not one that has been paid.
+         *
+         * A card due reminder quotes two rupee amounts and names an account, which is
+         * enough for the looser rules to book it: "Total Amount Due of Rs 2,783.00 ...
+         * payable by 06-Aug-26" entered the ledger as ₹2,783 of spend, and the common
+         * variant that adds "Payments are credited within 2 working days" entered it as
+         * ₹2,783 of *income*, filed under Income & Refunds — a reminder to pay a bill
+         * counted as money arriving. Nothing has settled when one of these is sent, so
+         * like [NON_TRANSACTIONAL] it produces no row at all rather than an unparsed
+         * one: there is nothing for the user to review.
+         */
+        private val DUE_REMINDER = Regex(
+            "(?i)\\b(?:(?:total|minimum|min|net)\\s+(?:amount\\s+|amt\\s+)?due|amount\\s+due|" +
+                "due\\s+date|payable\\s+by|ignore\\s+if\\s+(?:already\\s+)?paid|credit\\s+bureaus?|" +
+                // "is due by 06-Aug-26" — the date is required, so an ordinary alert
+                // that merely contains the word "due" is not swept up.
+                "due\\s+(?:by|on)\\s+\\d{1,2}[-/]|" +
+                "statement\\s+(?:for\\s+\\w+\\s+)?(?:is|has\\s+been)?\\s*(?:generated|ready)|" +
+                "last\\s+date\\s+(?:for|of)\\s+payment|" +
+                "avoid\\s+late\\s+(?:payment\\s+)?(?:fee|fees|charges))\\b"
+        )
+
+        /**
+         * The escape hatch for [DUE_REMINDER].
+         *
+         * A payment confirmation routinely restates the balance it just cleared —
+         * "Payment of Rs 2,783.00 received towards Credit Card XX7009. Total Amount Due
+         * is now Rs 0.00" — and dropping that would lose a real transaction, which T2.3
+         * forbids. So the reminder guard only fires when nothing in the message says the
+         * money has actually moved. The tenses matter: "has been credited" is a
+         * settlement, "are credited within 2 working days" is a promise.
+         */
+        private val SETTLED_PAYMENT = Regex(
+            "(?i)(?:\\b(?:has|have|had)\\s+been\\s+" +
+                "(?:credited|debited|received|paid|processed|reversed)\\b|" +
+                "\\b(?:was|were)\\s+(?:credited|debited|received|paid|processed|reversed)\\b|" +
+                "\\b(?:has|have|we)\\s+received\\b|" +
+                // The window has to tolerate the "." in "Rs 2,783.00", which sits
+                // between "payment of" and "received" in every such confirmation.
+                "\\bpayment\\s+(?:of\\s+[\\w\\s.,₹]{0,40}?)?received\\b|" +
+                "\\bthank\\s+you\\s+for\\s+(?:your\\s+)?payment\\b|" +
+                "\\bsuccessfully\\s+(?:paid|processed|credited|debited)\\b)"
         )
 
         /**
@@ -117,6 +191,15 @@ class SmsParserEngine {
         // deliberate — T2.3 exists so genuine transactions are never dropped, and a
         // marketing SMS in the review queue is noise that trains the user to ignore it.
         if (NON_TRANSACTIONAL.containsMatchIn(cleanBody)) return ParseResult()
+
+        // A bill that is owed is not a bill that was paid. Checked before the rules so
+        // the amount never reaches them, and after the settlement test so a payment
+        // confirmation that restates the outstanding balance still parses.
+        if (DUE_REMINDER.containsMatchIn(cleanBody) &&
+            !SETTLED_PAYMENT.containsMatchIn(cleanBody)
+        ) {
+            return ParseResult()
+        }
 
         val hash = generateHash(sender, cleanBody, timestamp)
         val status = if (NEGATED.containsMatchIn(cleanBody)) STATUS_FAILED else STATUS_POSTED
@@ -507,7 +590,7 @@ class SmsParserEngine {
         val byMerchant = determineCategory(merchant, rules)
         if (byMerchant != UNCATEGORISED) return byMerchant
         return when (txnType) {
-            TxnType.TRANSFER -> "Transfers"
+            TxnType.TRANSFER, TxnType.CARD_PAYMENT -> "Transfers"
             TxnType.ATM -> "ATM Cash"
             TxnType.REFUND, TxnType.INCOME -> "Income & Refunds"
             else -> UNCATEGORISED
@@ -539,7 +622,10 @@ class SmsParserEngine {
     ): String {
         val lower = text.lowercase(Locale.ROOT)
         return when {
-            lower.contains("emi") || lower.contains("instalment") || lower.contains("installment") -> TxnType.EMI
+            EMI_WORD.containsMatchIn(lower) -> TxnType.EMI
+            // Ahead of the refund and direction tests: the card's acknowledgement is a
+            // credit, and every rule below would otherwise read it as money arriving.
+            CARD_BILL_PAYMENT.containsMatchIn(lower) -> TxnType.CARD_PAYMENT
             lower.contains("refund") || lower.contains("reversed") || lower.contains("cashback") -> TxnType.REFUND
             channel == "ATM" || lower.contains("withdrawn") -> TxnType.ATM
             // Previously this required "charge" *and* "fee", so an "annual card fee"

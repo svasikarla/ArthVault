@@ -11,9 +11,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Fingerprint
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.outlined.Fingerprint
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -81,7 +81,7 @@ private fun LockedContent(
     onUnlock: () -> Unit
 ) {
     Icon(
-        imageVector = Icons.Default.Lock,
+        imageVector = Icons.Outlined.Lock,
         contentDescription = null,
         tint = MaterialTheme.colorScheme.primary,
         modifier = Modifier.size(56.dp)
@@ -138,7 +138,7 @@ private fun LockedContent(
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.small
     ) {
-        Icon(Icons.Default.Fingerprint, contentDescription = null, modifier = Modifier.size(20.dp))
+        Icon(Icons.Outlined.Fingerprint, contentDescription = null, modifier = Modifier.size(20.dp))
         Spacer(Modifier.width(Spacing.tight))
         Text(if (isFirstRun) "Create vault" else "Unlock")
     }
@@ -159,7 +159,7 @@ private fun UnlockingContent() {
 @Composable
 private fun NeedsLockContent(onOpenSecuritySettings: () -> Unit) {
     Icon(
-        imageVector = Icons.Default.Warning,
+        imageVector = Icons.Outlined.Warning,
         contentDescription = null,
         tint = VaultTheme.semantics.caution,
         modifier = Modifier.size(56.dp)
@@ -194,7 +194,7 @@ private fun NeedsLockContent(onOpenSecuritySettings: () -> Unit) {
 @Composable
 private fun InvalidatedContent(onDiscardVault: () -> Unit) {
     Icon(
-        imageVector = Icons.Default.Warning,
+        imageVector = Icons.Outlined.Warning,
         contentDescription = null,
         tint = MaterialTheme.colorScheme.error,
         modifier = Modifier.size(56.dp)

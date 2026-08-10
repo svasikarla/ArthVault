@@ -103,6 +103,11 @@ private val dayMonthYear = DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.get
 private val dayMonth = DateTimeFormatter.ofPattern("d MMM", Locale.getDefault())
 private val dayMonthTime = DateTimeFormatter.ofPattern("dd MMM, hh:mm a", Locale.getDefault())
 private val fullTimestamp = DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a", Locale.getDefault())
+private val timeOnly = DateTimeFormatter.ofPattern("hh:mm a", Locale.getDefault())
+
+// Spelled out, because a day header is read once per group rather than once per row
+// and has the width to be unambiguous: "8 August", not "08 Aug".
+private val dayAndMonth = DateTimeFormatter.ofPattern("d MMMM", Locale.getDefault())
 
 private fun Long.local() = Instant.ofEpochMilli(this).atZone(zone)
 
@@ -117,3 +122,39 @@ fun formatDateTime(timestamp: Long): String = dayMonthTime.format(timestamp.loca
 
 /** `09 Aug 2026, 02:15 PM` — the transaction detail sheet. */
 fun formatFullTimestamp(timestamp: Long): String = fullTimestamp.format(timestamp.local())
+
+/** `02:15 PM` — a feed row that already sits under a date header. */
+fun formatTimeOfDay(timestamp: Long): String = timeOnly.format(timestamp.local())
+
+/**
+ * The local calendar day a timestamp falls on, as a sortable key.
+ *
+ * Epoch day rather than the formatted string: two transactions in the same minute of
+ * the same day must group together regardless of how their header happens to render,
+ * and a locale change must not silently split a group in two.
+ */
+fun dayOf(timestamp: Long): Long = timestamp.local().toLocalDate().toEpochDay()
+
+/**
+ * The heading above a day's transactions — `Today`, `Yesterday`, `8 August`, or
+ * `8 August 2025` once the year stops being obvious.
+ *
+ * The feed used to print the full `09 Aug, 02:15 PM` on every row, so orienting in
+ * time meant reading the same date forty times down a column. With a header the rows
+ * only need the clock.
+ *
+ * @param now injectable so the test does not depend on the day it runs.
+ */
+fun formatDayHeader(timestamp: Long, now: Long = System.currentTimeMillis()): String {
+    val day = timestamp.local().toLocalDate()
+    val today = now.local().toLocalDate()
+    return when (day) {
+        today -> "Today"
+        today.minusDays(1) -> "Yesterday"
+        else -> if (day.year == today.year) {
+            dayAndMonth.format(day)
+        } else {
+            dayMonthYear.format(day)
+        }
+    }
+}

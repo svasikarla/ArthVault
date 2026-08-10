@@ -2,7 +2,11 @@ package com.arthvault
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.ReceiptLong
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalDensity
@@ -20,25 +24,35 @@ import com.arthvault.data.analytics.PeriodSummary
 import com.arthvault.data.analytics.RecurringItem
 import com.arthvault.data.local.entity.TransactionEntity
 import androidx.compose.material3.Text
+import com.arthvault.data.local.DefaultSeedData
+import com.arthvault.data.query.QueryParser
 import com.arthvault.ui.components.AnalyticsSkeleton
+import com.arthvault.ui.components.BarAction
 import com.arthvault.ui.components.EmptyState
+import com.arthvault.ui.components.TooltipIconButton
 import com.arthvault.ui.components.LocalSnackbar
 import com.arthvault.ui.components.RowSkeleton
 import com.arthvault.ui.components.SnackbarNotifier
+import com.arthvault.ui.components.colorIndexFor
+import com.arthvault.ui.components.initialsOf
 import com.arthvault.ui.screens.CashPositionCard
 import com.arthvault.ui.screens.CategoryBreakdownCard
 import com.arthvault.ui.screens.DailySpendChart
 import com.arthvault.ui.screens.PeriodSelector
+import com.arthvault.ui.screens.QUERY_EXAMPLES
 import com.arthvault.ui.screens.RecurringItemCard
 import com.arthvault.ui.screens.SpendPaceChart
 import com.arthvault.ui.screens.TransactionCard
+import com.arthvault.ui.format.formatDayHeader
 import com.arthvault.ui.format.formatDirectedMoney
 import com.arthvault.ui.format.formatMoney
 import com.arthvault.ui.format.formatMoneyPrecise
 import com.arthvault.ui.format.formatSignedMoney
 import com.arthvault.ui.theme.MyApplicationTheme
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -190,12 +204,7 @@ class DesignSystemRenderTest {
         DailySpendChart(buckets = buckets)
         CategoryBreakdownCard(period = period, slices = slices, onSliceClick = {})
         RecurringItemCard(item = recurring, onClick = {})
-        TransactionCard(
-            transaction = transaction,
-            onClick = {},
-            onChangeCategory = {},
-            onVoid = {},
-        )
+        TransactionCard(transaction = transaction, onClick = {})
         EmptyState(
             icon = Icons.Default.ReceiptLong,
             title = "No transactions yet",
@@ -289,6 +298,113 @@ class DesignSystemRenderTest {
         // ...and so is using it. The message is dropped and logged, not thrown.
         notifier!!.show("this goes nowhere")
         compose.onNodeWithText("no scaffold above this").assertExists()
+    }
+
+    /**
+     * Top-bar actions carry a visible label, not just a glyph.
+     *
+     * Moving "Scan SMS inbox" out of the header card and into the app bar was right —
+     * it had been one of three controls competing to be the screen's primary action —
+     * but it went in icon-only, which left a scanner glyph and a sparkle glyph with
+     * their meaning available only to TalkBack. An icon alone cannot carry an action
+     * that fills the whole app with data.
+     */
+    @Test
+    fun `bar actions show their label as text`() {
+        render {
+            BarAction(label = "Scan SMS", icon = Icons.Default.QrCodeScanner, onClick = {})
+            BarAction(label = "Recalculate", icon = Icons.Default.Refresh, onClick = {})
+        }
+        compose.onNodeWithText("Scan SMS").assertIsDisplayed()
+        compose.onNodeWithText("Recalculate").assertIsDisplayed()
+    }
+
+    /**
+     * The repeated row actions stay icon-only — a label on every row of the feed would
+     * drown the merchant names — but the label reaches a screen reader, and long-press
+     * reveals it for everyone else.
+     */
+    @Test
+    fun `repeated row actions name themselves to a screen reader`() {
+        render {
+            TooltipIconButton(label = "Change category", icon = Icons.Default.Edit, onClick = {})
+            TooltipIconButton(label = "Void transaction", icon = Icons.Default.Delete, onClick = {})
+        }
+        compose.onNode(hasContentDescription("Change category")).assertExists()
+        compose.onNode(hasContentDescription("Void transaction")).assertExists()
+    }
+
+    // --- the feed's new furniture -------------------------------------------
+
+    /**
+     * The avatar has to be a stable function of the category, not of insertion order or
+     * of anything the JVM is free to vary. Two SWIGGY rows a month apart in the same
+     * category must be the same colour, or the tint is noise rather than information.
+     */
+    @Test
+    fun `a category always maps to the same slot in the ramp`() {
+        repeat(3) {
+            assertEquals(colorIndexFor("Food & Dining", 6), colorIndexFor("Food & Dining", 6))
+        }
+        // Negative hash codes are the case a plain `%` gets wrong: it returns a
+        // negative index and the ramp lookup throws on the first row that hits one.
+        listOf("Food & Dining", "Transport & Fuel", "Grocery", "Shopping", "Other / Misc", "")
+            .forEach { category ->
+                val index = colorIndexFor(category, 6)
+                assertTrue("index out of ramp for '$category': $index", index in 0..5)
+            }
+    }
+
+    @Test
+    fun `initials come from the merchant, however it is punctuated`() {
+        assertEquals("SW", initialsOf("SWIGGY"))
+        assertEquals("AI", initialsOf("AMAZON INDIA"))
+        assertEquals("IB", initialsOf("ICICI Bank Credit"))
+        // Parsed merchants arrive delimited by whatever the bank used.
+        assertEquals("BG", initialsOf("BLINKIT-GROCERY"))
+        assertEquals("PU", initialsOf("PAYTM*UBER"))
+        // Nothing to take initials from must still render something.
+        assertEquals("?", initialsOf(""))
+        assertEquals("?", initialsOf("—"))
+    }
+
+    /**
+     * `Today` and `Yesterday` are the whole point of the header; a formatter that
+     * silently fell back to the date for both would look fine and say nothing.
+     */
+    @Test
+    fun `day headers name the recent days and date the rest`() {
+        val now = 1_754_000_000_000L // 2025-08-01, mid-afternoon IST
+        val day = 86_400_000L
+        assertEquals("Today", formatDayHeader(now, now))
+        assertEquals("Yesterday", formatDayHeader(now - day, now))
+        assertNotEquals("Today", formatDayHeader(now - 5 * day, now))
+        assertNotEquals("Yesterday", formatDayHeader(now - 5 * day, now))
+        // A year old: the year has to appear, or "8 August" is ambiguous.
+        assertTrue(formatDayHeader(now - 400 * day, now).any { it.isDigit() })
+    }
+
+    @Test
+    fun `the feed row composes with an avatar instead of two icon buttons`() {
+        render { TransactionCard(transaction = transaction, onClick = {}) }
+        compose.onNodeWithText("Swiggy").assertIsDisplayed()
+        compose.onNodeWithText(initialsOf("Swiggy")).assertIsDisplayed()
+        // The destructive action is no longer one thumb-slip from a scrolling list.
+        compose.onNode(hasContentDescription("Void transaction")).assertDoesNotExist()
+    }
+
+    /**
+     * The example chips promise a question the parser will accept. A chip that offered
+     * a phrasing the grammar refuses would teach the user the wrong shape and answer
+     * with "that question could not be read" — the exact failure they exist to prevent.
+     */
+    @Test
+    fun `every suggested question is one the parser can read`() {
+        val parser = QueryParser(DefaultSeedData.categories.map { it.name })
+        val now = System.currentTimeMillis()
+        QUERY_EXAMPLES.forEach { example ->
+            assertNotNull("the parser refuses its own suggestion: '$example'", parser.parse(example, now))
+        }
     }
 
     @Test

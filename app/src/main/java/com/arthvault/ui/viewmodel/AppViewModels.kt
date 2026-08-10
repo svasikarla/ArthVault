@@ -6,6 +6,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.arthvault.data.analytics.PeriodScope
 import com.arthvault.data.local.entity.AdjustmentEntity
+import com.arthvault.data.local.AddCategoryOutcome
+import com.arthvault.data.local.DeleteCategoryOutcome
 import com.arthvault.data.local.entity.CategoryEntity
 import com.arthvault.data.local.entity.OwnAccountEntity
 import com.arthvault.data.local.entity.ParserRuleEntity
@@ -79,6 +81,25 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             repository.updateTransactionCategory(id, newCategory, merchant, updateAllForMerchant)
         }
+    }
+
+    /**
+     * Creates one of the user's own categories.
+     *
+     * These live on the Ledger ViewModel rather than the Vault one because both screens
+     * that offer the action already hold it, and because [categories] — the list the new
+     * one has to appear in — is here. `VaultViewModel` had an `addCustomCategory` that
+     * nothing ever called.
+     *
+     * The outcome comes back through a callback rather than a StateFlow: the caller
+     * shows it as a snackbar and there is nothing to retain afterwards.
+     */
+    fun addCategory(name: String, onResult: (AddCategoryOutcome) -> Unit) {
+        viewModelScope.launch { onResult(repository.addCustomCategory(name)) }
+    }
+
+    fun deleteCategory(name: String, onResult: (DeleteCategoryOutcome) -> Unit) {
+        viewModelScope.launch { onResult(repository.deleteCustomCategory(name)) }
     }
 
     fun addManualTransaction(amount: Double, direction: String, merchant: String, category: String, channel: String, note: String) {
@@ -190,9 +211,10 @@ class AnalyticsViewModel(application: Application) : AndroidViewModel(applicatio
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
-    init {
-        refreshAnalytics()
-    }
+    // No `init { refreshAnalytics() }`. This ViewModel is constructed the moment the
+    // vault unlocks, whichever screen the user is on, so computing here ran six passes
+    // over the whole ledger before anyone had asked for a figure — and then AnalyticsScreen
+    // ran them again on its first composition. The screen owns the trigger now.
 
     fun setScope(scope: PeriodScope) {
         if (_scope.value == scope) return
@@ -365,9 +387,4 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun addCustomCategory(name: String, colorHex: String, iconName: String) {
-        viewModelScope.launch {
-            repository.addCustomCategory(name, colorHex, iconName)
-        }
-    }
 }

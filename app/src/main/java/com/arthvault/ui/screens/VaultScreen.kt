@@ -17,11 +17,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.DeleteForever
-import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Save
-import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.outlined.DeleteForever
+import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Save
+import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -139,7 +139,7 @@ fun VaultScreen(
                 VaultCard(accent = accent) {
                     CardHeading(
                         title = if (ok) "No network access" else "Network access detected",
-                        icon = Icons.Default.Shield,
+                        icon = Icons.Outlined.Shield,
                         iconTint = accent
                     )
                     Spacer(modifier = Modifier.height(Spacing.tight))
@@ -182,7 +182,7 @@ fun VaultScreen(
                 VaultCard {
                     CardHeading(
                         title = "Export your ledger",
-                        icon = Icons.Default.Download,
+                        icon = Icons.Outlined.Download,
                         iconTint = MaterialTheme.colorScheme.primary,
                         subtitle = "Plain files you can open anywhere. Not encrypted."
                     )
@@ -196,7 +196,7 @@ fun VaultScreen(
                             modifier = Modifier.weight(1f),
                             shape = MaterialTheme.shapes.small
                         ) {
-                            Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Outlined.Save, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(Spacing.tight))
                             Text("Export CSV")
                         }
@@ -273,7 +273,7 @@ fun VaultScreen(
                 VaultCard {
                     CardHeading(
                         title = "Encrypted backup",
-                        icon = Icons.Default.Lock,
+                        icon = Icons.Outlined.Lock,
                         iconTint = semantics.info
                     )
                     Spacer(modifier = Modifier.height(Spacing.tight))
@@ -294,7 +294,7 @@ fun VaultScreen(
                             modifier = Modifier.weight(1f),
                             shape = MaterialTheme.shapes.small
                         ) {
-                            Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Outlined.Save, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(Spacing.tight))
                             Text("Back up")
                         }
@@ -336,7 +336,7 @@ fun VaultScreen(
                 VaultCard(accent = semantics.negative) {
                     CardHeading(
                         title = "Delete everything on this device",
-                        icon = Icons.Default.DeleteForever,
+                        icon = Icons.Outlined.DeleteForever,
                         iconTint = semantics.negative
                     )
                     Spacer(modifier = Modifier.height(Spacing.tight))

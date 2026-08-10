@@ -17,8 +17,11 @@ import com.arthvault.data.analytics.PeriodSummary
 import com.arthvault.data.analytics.RecurringItem
 import com.arthvault.data.backup.BackupCodec
 import com.arthvault.data.backup.BackupPayload
+import com.arthvault.data.local.AddCategoryOutcome
 import com.arthvault.data.local.AppDatabase
+import com.arthvault.data.local.CategoryEditor
 import com.arthvault.data.local.DefaultSeedData
+import com.arthvault.data.local.DeleteCategoryOutcome
 import com.arthvault.data.local.entity.AdjustmentEntity
 import com.arthvault.data.local.entity.AdjustmentField
 import com.arthvault.data.local.entity.AdjustmentSource
@@ -849,15 +852,50 @@ class SmsRepository(private val context: Context) {
         DefaultSeedData.merchantRules.forEach { merchantRuleDao.insertOrUpdateRule(it) }
     }
 
-    suspend fun addCustomCategory(name: String, colorHex: String, iconName: String) = withContext(Dispatchers.IO) {
-        categoryDao.insertCategory(
-            CategoryEntity(
-                name = name,
-                iconName = iconName,
-                colorHex = colorHex,
-                isCustom = true
+    /**
+     * Creates one of the user's own categories, or explains why it could not.
+     *
+     * `iconName` and `colorHex` are not asked for. Both columns are vestigial: the
+     * seeded hexes were tuned against a palette this app no longer has, nothing in
+     * `ui/` reads either field, and a category's colour is derived at render time from
+     * the theme-aware ramp (see `MerchantAvatar`) so that it is legible on both
+     * grounds. Offering the user a colour picker whose result is never drawn would be
+     * a control that does nothing. The neutral defaults written here are the same ones
+     * `BackupCodec` substitutes when restoring a backup that predates the columns, so
+     * a created category and a restored one are indistinguishable.
+     */
+    suspend fun addCustomCategory(name: String): AddCategoryOutcome = withContext(Dispatchers.IO) {
+        val existing = categoryDao.getAllCategories().first().map { it.name }
+        val outcome = CategoryEditor.validateNew(name, existing)
+        if (outcome is AddCategoryOutcome.Added) {
+            categoryDao.insertCategory(
+                CategoryEntity(
+                    name = outcome.name,
+                    iconName = "Category",
+                    colorHex = "#607D8B",
+                    isCustom = true
+                )
             )
-        )
+        }
+        outcome
+    }
+
+    /**
+     * Removes one of the user's own categories, if nothing is relying on it.
+     *
+     * The usage count comes from [getAllTransactions] rather than the raw table,
+     * because a transaction the user has already recategorised carries its new
+     * category only in the adjustments overlay. Counting the stored rows would report
+     * a freshly-created category as unused at the exact moment it is being used.
+     */
+    suspend fun deleteCustomCategory(name: String): DeleteCategoryOutcome = withContext(Dispatchers.IO) {
+        val categories = categoryDao.getAllCategories().first()
+        val transactionsUsing = getAllTransactions().first().count { it.category == name }
+        val rulesUsing = merchantRuleDao.getAllRulesList().count { it.assignedCategory == name }
+
+        val outcome = CategoryEditor.canDelete(name, categories, transactionsUsing, rulesUsing)
+        if (outcome is DeleteCategoryOutcome.Deleted) categoryDao.deleteCustomCategory(name)
+        outcome
     }
 
     suspend fun addCustomParserRule(

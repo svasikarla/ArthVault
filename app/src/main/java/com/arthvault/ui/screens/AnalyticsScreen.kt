@@ -2,6 +2,7 @@ package com.arthvault.ui.screens
 
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.text.KeyboardActions
@@ -19,29 +20,31 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.NotificationsActive
-import androidx.compose.material.icons.filled.PieChart
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Repeat
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.SwapHoriz
-import androidx.compose.material.icons.filled.TrendingUp
-import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.outlined.NotificationsActive
+import androidx.compose.material.icons.outlined.PieChart
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Repeat
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.SwapHoriz
+import androidx.compose.material.icons.outlined.TrendingUp
+import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -56,6 +59,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.arthvault.data.analytics.AnalyticsPeriod
 import com.arthvault.data.analytics.CategorySlice
 import com.arthvault.data.analytics.CategoryTrend
@@ -64,6 +68,7 @@ import com.arthvault.data.analytics.InternalTransferSummary
 import com.arthvault.data.analytics.RecurringItem
 import com.arthvault.data.query.QueryMetric
 import com.arthvault.ui.components.AnalyticsSkeleton
+import com.arthvault.ui.components.BarAction
 import com.arthvault.ui.components.CardHeading
 import com.arthvault.ui.components.VaultCard
 import com.arthvault.ui.components.VaultRowCard
@@ -83,13 +88,28 @@ import com.arthvault.ui.theme.moneySmall
 import com.arthvault.ui.theme.numeric
 import com.arthvault.ui.viewmodel.AnalyticsViewModel
 
+/**
+ * Questions the grammar is guaranteed to understand.
+ *
+ * Four, not ten: they exist to demonstrate the shape — metric, subject, period — not
+ * to enumerate the vocabulary. Each one is covered by a case in `QueryParserTest`, so
+ * a chip can never offer a question the parser would refuse.
+ */
+internal val QUERY_EXAMPLES = listOf(
+    "spend on fuel last quarter",
+    "biggest spend this month",
+    "how much did I earn last month",
+    "average spend on groceries",
+)
+
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun AnalyticsScreen(
     viewModel: AnalyticsViewModel
 ) {
-    val analytics by viewModel.analytics.collectAsState()
-    val scope by viewModel.scope.collectAsState()
-    val isLoading by viewModel.isLoading.collectAsState()
+    val analytics by viewModel.analytics.collectAsStateWithLifecycle()
+    val scope by viewModel.scope.collectAsStateWithLifecycle()
+    val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val recurringList = analytics.recurring
     val forecast = analytics.forecast
     val anomalies = analytics.anomalies
@@ -97,12 +117,17 @@ fun AnalyticsScreen(
     val categoryBreakdown = analytics.categoryBreakdown
     val categoryTrends = analytics.categoryTrends
     val period = analytics.period
+    val priceHikes = recurringList.filter { it.isPriceHike }
 
-    val queryAnswer by viewModel.queryAnswer.collectAsState()
-    val tappedThrough by viewModel.tappedThrough.collectAsState()
+    val queryAnswer by viewModel.queryAnswer.collectAsStateWithLifecycle()
+    val tappedThrough by viewModel.tappedThrough.collectAsStateWithLifecycle()
     var question by rememberSaveable { mutableStateOf("") }
     val semantics = VaultTheme.semantics
 
+    // Recomputed whenever the screen is entered, so a scan run from the Ledger is
+    // reflected on arrival here. The ViewModel deliberately does not also compute in
+    // its `init`: it is constructed at unlock, which made every first visit run the
+    // six passes over the ledger twice.
     LaunchedEffect(Unit) {
         viewModel.refreshAnalytics()
     }
@@ -149,290 +174,341 @@ fun AnalyticsScreen(
     VaultScaffold(
         title = "Analytics",
         actions = {
-            IconButton(onClick = { viewModel.refreshAnalytics() }) {
-                Icon(Icons.Default.Refresh, contentDescription = "Recalculate insights")
-            }
+            BarAction(
+                label = "Recalculate",
+                icon = Icons.Outlined.Refresh,
+                onClick = { viewModel.refreshAnalytics() }
+            )
         }
     ) { padding ->
-        LazyColumn(
+        // Recalculating stays in the app bar — the gesture is undiscoverable on its
+        // own — but pulling a dashboard down to rebuild it is what people try first.
+        PullToRefreshBox(
+            isRefreshing = isLoading,
+            onRefresh = { viewModel.refreshAnalytics() },
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(horizontal = Spacing.standard),
-            verticalArrangement = Arrangement.spacedBy(Spacing.standard)
         ) {
-            item {
-                Text(
-                    text = "Deterministic statistical insights, computed on this device.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = Spacing.standard),
+                verticalArrangement = Arrangement.spacedBy(Spacing.standard)
+            ) {
+                // Every figure below is scoped to whatever is selected here, so it stays
+                // on screen. It used to scroll away in the first flick, which is why every
+                // card underneath had to restate the window in its own subtitle to stop a
+                // percentage meaning nothing.
+                stickyHeader(key = "period") {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.background)
+                            .padding(vertical = Spacing.tight)
+                    ) {
+                        PeriodSelector(selected = scope, onSelect = { viewModel.setScope(it) })
+                    }
+                }
 
-            // Every figure below is scoped to whatever is selected here.
-            item {
-                PeriodSelector(selected = scope, onSelect = { viewModel.setScope(it) })
-            }
+                // Recomputing runs six passes over the whole ledger. A skeleton of the
+                // cards that are coming says what is being rebuilt; the 2dp progress line
+                // this replaces said only that something was happening somewhere.
+                //
+                // The crossfade covers the charts as well as the figures. It used to wrap
+                // only the top card, so changing the period animated the first third of the
+                // screen and hard-swapped the rest underneath it.
+                item {
+                    Crossfade(targetState = isLoading, label = "analytics-loading") { loading ->
+                        if (loading) {
+                            AnalyticsSkeleton()
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(Spacing.standard)) {
+                                // Earned, spent, left — the three figures the screen leads
+                                // with, and the only card carrying the accent. Ten cards at
+                                // identical visual weight is a screen with no focal point.
+                                CashPositionCard(
+                                    period = period,
+                                    summary = analytics.summary,
+                                    comparison = analytics.comparisonSummary,
+                                    forecast = forecast,
+                                    accented = true,
+                                    onShowIncome = {
+                                        viewModel.showSourceTransactions(analytics.summary.incomeTransactionIds)
+                                    },
+                                    onShowSpend = {
+                                        viewModel.showSourceTransactions(analytics.summary.spendTransactionIds)
+                                    }
+                                )
 
-            // Recomputing runs six passes over the whole ledger. A skeleton of the
-            // cards that are coming says what is being rebuilt; the 2dp progress line
-            // this replaces said only that something was happening somewhere.
-            item {
-                Crossfade(targetState = isLoading, label = "analytics-loading") { loading ->
-                    if (loading) {
-                        AnalyticsSkeleton()
-                    } else {
-                        Column(verticalArrangement = Arrangement.spacedBy(Spacing.standard)) {
-                            // Earned, spent, left — the three figures the screen now
-                            // leads with. Income was previously computed and discarded.
-                            CashPositionCard(
-                                period = period,
-                                summary = analytics.summary,
-                                comparison = analytics.comparisonSummary,
-                                forecast = forecast,
-                                onShowIncome = {
-                                    viewModel.showSourceTransactions(analytics.summary.incomeTransactionIds)
-                                },
-                                onShowSpend = {
-                                    viewModel.showSourceTransactions(analytics.summary.spendTransactionIds)
-                                }
-                            )
+                                // The screen had no time axis at all before these two.
+                                SpendPaceChart(
+                                    period = period,
+                                    current = cumulativeSpend(analytics.dailyTotals),
+                                    previous = cumulativeSpend(analytics.comparisonDailyTotals)
+                                )
 
-                            // The screen had no time axis at all before these two.
-                            SpendPaceChart(
-                                period = period,
-                                current = cumulativeSpend(analytics.dailyTotals),
-                                previous = cumulativeSpend(analytics.comparisonDailyTotals)
-                            )
-
-                            DailySpendChart(buckets = analytics.dailyTotals)
+                                DailySpendChart(buckets = analytics.dailyTotals)
+                            }
                         }
                     }
                 }
-            }
 
-            // F4.1 — ask the ledger a question. Nothing here is generated: the
-            // grammar is deterministic and the arithmetic runs over rows you can
-            // open (F4.2 forbids a model anywhere near the numbers).
-            item {
-                VaultCard {
-                    CardHeading(
-                        title = "Ask your ledger",
-                        icon = Icons.Default.Search,
-                        iconTint = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.height(Spacing.snug))
-                    OutlinedTextField(
-                        value = question,
-                        onValueChange = { question = it },
-                        label = { Text("Question") },
-                        placeholder = { Text("e.g. spend on fuel last quarter") },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = MaterialTheme.shapes.small,
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                        keyboardActions = KeyboardActions(onSearch = { viewModel.ask(question) })
-                    )
-                    Spacer(modifier = Modifier.height(Spacing.snug))
-                    Button(
-                        onClick = { viewModel.ask(question) },
-                        enabled = question.isNotBlank(),
-                        shape = MaterialTheme.shapes.small
-                    ) { Text("Ask") }
+                // F4.1 — ask the ledger a question. Nothing here is generated: the
+                // grammar is deterministic and the arithmetic runs over rows you can
+                // open (F4.2 forbids a model anywhere near the numbers).
+                //
+                // Second on the screen, not fifth. It is the most distinctive thing the app
+                // does and it was below two charts.
+                item {
+                    VaultCard {
+                        CardHeading(
+                            title = "Ask your ledger",
+                            icon = Icons.Outlined.Search,
+                            iconTint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(Spacing.snug))
+                        OutlinedTextField(
+                            value = question,
+                            onValueChange = { question = it },
+                            label = { Text("Question") },
+                            placeholder = { Text("e.g. spend on fuel last quarter") },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = MaterialTheme.shapes.small,
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            keyboardActions = KeyboardActions(onSearch = { viewModel.ask(question) })
+                        )
+                        Spacer(modifier = Modifier.height(Spacing.snug))
 
-                    when (val answer = queryAnswer) {
-                        null -> Unit
-
-                        // Saying "I could not read that" is a real answer. Showing
-                        // a confident 0 for a question the app misread is how a
-                        // wrong number gets believed.
-                        is AnalyticsViewModel.QueryAnswer.NotUnderstood -> {
-                            Spacer(modifier = Modifier.height(Spacing.snug))
-                            Text(
-                                "That question could not be read. Try naming a metric and " +
-                                    "a subject, e.g. \"total spend on groceries last month\".",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.error
-                            )
+                        // The grammar is deterministic, which means it refuses anything it
+                        // cannot read rather than guessing — correct, and the reason
+                        // examples are not decoration here. Without them the first thing a
+                        // new user sees is the refusal, and there is nothing on screen
+                        // telling them what a readable question looks like. Tapping one
+                        // fills the field and answers it, so the shape is learned by doing.
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.tight)) {
+                            items(QUERY_EXAMPLES) { example ->
+                                SuggestionChip(
+                                    onClick = {
+                                        question = example
+                                        viewModel.ask(example)
+                                    },
+                                    label = { Text(example) },
+                                    shape = MaterialTheme.shapes.small
+                                )
+                            }
                         }
 
-                        is AnalyticsViewModel.QueryAnswer.Answered -> {
-                            val result = answer.result
-                            Spacer(modifier = Modifier.height(Spacing.snug))
-                            // The restatement matters as much as the figure: a
-                            // misread question is only detectable if the app says
-                            // which one it answered.
-                            Text(
-                                result.intent.interpretation,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = if (result.intent.metric == QueryMetric.COUNT) {
-                                    formatCount(result.value)
-                                } else {
-                                    formatMoneyPrecise(result.value)
-                                },
-                                style = MaterialTheme.typography.moneyLarge,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            if (result.transactionIds.isNotEmpty()) {
-                                TextButton(
-                                    onClick = { viewModel.showSourceTransactions(result.transactionIds) }
-                                ) {
-                                    Text("From ${result.matchCount} transactions — show them")
+                        Spacer(modifier = Modifier.height(Spacing.snug))
+                        Button(
+                            onClick = { viewModel.ask(question) },
+                            enabled = question.isNotBlank(),
+                            shape = MaterialTheme.shapes.small
+                        ) { Text("Ask") }
+
+                        when (val answer = queryAnswer) {
+                            null -> Unit
+
+                            // Saying "I could not read that" is a real answer. Showing
+                            // a confident 0 for a question the app misread is how a
+                            // wrong number gets believed.
+                            is AnalyticsViewModel.QueryAnswer.NotUnderstood -> {
+                                Spacer(modifier = Modifier.height(Spacing.snug))
+                                Text(
+                                    "That question could not be read. Try naming a metric and " +
+                                        "a subject, e.g. \"total spend on groceries last month\".",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+
+                            is AnalyticsViewModel.QueryAnswer.Answered -> {
+                                val result = answer.result
+                                Spacer(modifier = Modifier.height(Spacing.snug))
+                                // The restatement matters as much as the figure: a
+                                // misread question is only detectable if the app says
+                                // which one it answered.
+                                Text(
+                                    result.intent.interpretation,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = if (result.intent.metric == QueryMetric.COUNT) {
+                                        formatCount(result.value)
+                                    } else {
+                                        formatMoneyPrecise(result.value)
+                                    },
+                                    style = MaterialTheme.typography.moneyLarge,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                if (result.transactionIds.isNotEmpty()) {
+                                    TextButton(
+                                        onClick = { viewModel.showSourceTransactions(result.transactionIds) }
+                                    ) {
+                                        Text("From ${result.matchCount} transactions — show them")
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
 
-            // What the figures above deliberately leave out. Money disappearing from
-            // a total with no explanation is its own kind of wrong number, and if an
-            // account was marked by mistake this line is how the user finds out.
-            item {
+                // Everything the app thinks is worth a second look, in one block.
+                //
+                // A silent price hike, an outlier and a double charge were three separate
+                // sections, visually identical, scattered between the charts and the
+                // subscriptions list — three unrelated-looking warnings rather than one
+                // answer to "is anything wrong?". They are one section with one count now.
+                // Each row still carries its own tint, because a duplicate charge and an
+                // unusually large one are not the same claim.
+                val attentionCount = priceHikes.size + anomalies.size + duplicates.size
+                if (attentionCount > 0) {
+                    item(key = "attention-heading") {
+                        AlertSectionHeading("Needs your attention", attentionCount, period)
+                    }
+
+                    items(priceHikes, key = { "hike-${it.merchant}" }) { hike ->
+                        AlertRow(
+                            tint = semantics.caution,
+                            icon = Icons.Outlined.TrendingUp,
+                            title = "${hike.merchant} • ${formatMoney(hike.currentAmount)}",
+                            detail = "Silent price hike, up %.1f%% from %s".format(
+                                hike.priceHikePercentage,
+                                formatMoney(hike.previousAmount ?: 0.0)
+                            ),
+                            timestamp = hike.lastChargedTimestamp,
+                            modifier = Modifier.animateItem(),
+                            onClick = { viewModel.showSourceTransactions(hike.transactionIds) }
+                        )
+                    }
+
+                    // F3.3 — scoped to the selected window. These lists used to run over
+                    // the whole ledger with no dates on the rows, so a fourteen-month-old
+                    // outlier sat at the top forever, indistinguishable from yesterday.
+                    items(anomalies, key = { "anomaly-${it.transaction.id}" }) { anomaly ->
+                        AlertRow(
+                            tint = semantics.caution,
+                            icon = Icons.Outlined.NotificationsActive,
+                            title = "${anomaly.transaction.merchant} • ${formatMoney(anomaly.transaction.amount)}",
+                            detail = "%.1f× the usual %s for %s".format(
+                                anomaly.ratioToMedian,
+                                formatMoney(anomaly.categoryMedian),
+                                anomaly.transaction.category
+                            ),
+                            timestamp = anomaly.transaction.timestamp,
+                            modifier = Modifier.animateItem(),
+                            onClick = { viewModel.showSourceTransactions(listOf(anomaly.transaction.id)) }
+                        )
+                    }
+
+                    // F3.4
+                    items(duplicates, key = { "dupe-${it.id}" }) { txn ->
+                        AlertRow(
+                            tint = semantics.negative,
+                            icon = Icons.Outlined.Warning,
+                            title = "${txn.merchant} • ${formatMoney(txn.amount)}",
+                            detail = "Charged twice for the same amount within 24 hours",
+                            timestamp = txn.timestamp,
+                            modifier = Modifier.animateItem(),
+                            onClick = { viewModel.showSourceTransactions(listOf(txn.id)) }
+                        )
+                    }
+                }
+
+                // The three cards below are conditional, and the condition used to live
+                // *inside* `item { }`. An item that renders nothing is still an item, so
+                // each absent card left a 16dp gap from the list's `spacedBy` — 48dp of
+                // space with nothing in it — and each one appeared and vanished with a
+                // hard cut when the period changed. Gating the `item` itself removes the
+                // phantom gaps, and `animateItem` gives the arrival somewhere to come from.
+
+                // What the figures above deliberately leave out. Money disappearing from
+                // a total with no explanation is its own kind of wrong number, and if an
+                // account was marked by mistake this line is how the user finds out.
                 val internal = analytics.internalTransfers
                 if (!internal.isEmpty) {
-                    InternalTransferNote(
-                        summary = internal,
-                        onClick = { viewModel.showSourceTransactions(internal.transactionIds) }
-                    )
-                }
-            }
-
-            // F3.6 — this window against the like-for-like earlier one, biggest
-            // movement first.
-            item {
-                if (categoryTrends.isNotEmpty()) {
-                    CategoryTrendCard(
-                        period = period,
-                        trends = categoryTrends.take(6),
-                        onTrendClick = { viewModel.showSourceTransactions(it.transactionIds) }
-                    )
-                }
-            }
-
-            item {
-                if (categoryBreakdown.isNotEmpty()) {
-                    CategoryBreakdownCard(
-                        period = period,
-                        slices = categoryBreakdown,
-                        onSliceClick = { viewModel.showSourceTransactions(it.transactionIds) }
-                    )
-                }
-            }
-
-            // Price hike banner
-            item {
-                val priceHikeItems = recurringList.filter { it.isPriceHike }
-                if (priceHikeItems.isNotEmpty()) {
-                    VaultCard(accent = semantics.caution) {
-                        CardHeading(
-                            title = "Silent price hike detected",
-                            icon = Icons.Default.Warning,
-                            iconTint = semantics.caution
+                    item(key = "internal-transfers") {
+                        InternalTransferNote(
+                            summary = internal,
+                            modifier = Modifier.animateItem(),
+                            onClick = { viewModel.showSourceTransactions(internal.transactionIds) }
                         )
-                        Spacer(modifier = Modifier.height(Spacing.tight))
-                        priceHikeItems.forEach { hike ->
+                    }
+                }
+
+                // F3.6 — this window against the like-for-like earlier one, biggest
+                // movement first.
+                if (categoryTrends.isNotEmpty()) {
+                    item(key = "category-trends") {
+                        CategoryTrendCard(
+                            period = period,
+                            trends = categoryTrends.take(6),
+                            modifier = Modifier.animateItem(),
+                            onTrendClick = { viewModel.showSourceTransactions(it.transactionIds) }
+                        )
+                    }
+                }
+
+                if (categoryBreakdown.isNotEmpty()) {
+                    item(key = "category-breakdown") {
+                        CategoryBreakdownCard(
+                            period = period,
+                            slices = categoryBreakdown,
+                            modifier = Modifier.animateItem(),
+                            onSliceClick = { viewModel.showSourceTransactions(it.transactionIds) }
+                        )
+                    }
+                }
+
+                // Section: Detected Recurring Subscriptions
+                item {
+                    Column {
+                        Text(
+                            text = "Recurring subscriptions & outflows (${recurringList.size})",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        if (recurringList.isNotEmpty()) {
+                            // The monthly-equivalent run rate. A quarterly ₹1,499 and a
+                            // monthly ₹499 are not comparable until both are stated per
+                            // month, and the sum of raw charge amounts is not a rate at all.
+                            val perMonth = recurringList.sumOf {
+                                it.currentAmount * 30.0 / it.frequencyDays.coerceAtLeast(1)
+                            }
                             Text(
-                                text = "• ${hike.merchant}: up %.1f%% — %s → %s".format(
-                                    hike.priceHikePercentage,
-                                    formatMoney(hike.previousAmount ?: 0.0),
-                                    formatMoney(hike.currentAmount)
-                                ),
-                                style = MaterialTheme.typography.bodyMedium
+                                text = "About ${formatMoney(perMonth)} a month committed",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
                 }
-            }
 
-            // Section: Detected Recurring Subscriptions
-            item {
-                Column {
-                    Text(
-                        text = "Recurring subscriptions & outflows (${recurringList.size})",
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    if (recurringList.isNotEmpty()) {
-                        // The monthly-equivalent run rate. A quarterly ₹1,499 and a
-                        // monthly ₹499 are not comparable until both are stated per
-                        // month, and the sum of raw charge amounts is not a rate at all.
-                        val perMonth = recurringList.sumOf {
-                            it.currentAmount * 30.0 / it.frequencyDays.coerceAtLeast(1)
-                        }
+                if (recurringList.isEmpty()) {
+                    item {
                         Text(
-                            text = "About ${formatMoney(perMonth)} a month committed",
+                            text = "No recurring monthly charges or subscriptions detected yet.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+                } else {
+                    items(recurringList, key = { it.merchant }) { item ->
+                        // F4.4 — a recurring charge is an inference, so the charges it
+                        // was inferred from have to be reachable. "Netflix, ₹649
+                        // monthly" is only checkable if you can see the three charges
+                        // that produced it.
+                        RecurringItemCard(
+                            item = item,
+                            modifier = Modifier.animateItem(),
+                            onClick = { viewModel.showSourceTransactions(item.transactionIds) }
+                        )
+                    }
                 }
-            }
 
-            if (recurringList.isEmpty()) {
-                item {
-                    Text(
-                        text = "No recurring monthly charges or subscriptions detected yet.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            } else {
-                items(recurringList, key = { it.merchant }) { item ->
-                    // F4.4 — a recurring charge is an inference, so the charges it
-                    // was inferred from have to be reachable. "Netflix, ₹649
-                    // monthly" is only checkable if you can see the three charges
-                    // that produced it.
-                    RecurringItemCard(
-                        item = item,
-                        modifier = Modifier.animateItem(),
-                        onClick = { viewModel.showSourceTransactions(item.transactionIds) }
-                    )
-                }
+                item { Spacer(modifier = Modifier.height(Spacing.section)) }
             }
-
-            // Section: Anomalies (F3.3), scoped to the selected window. These lists
-            // used to run over the whole ledger with no dates on the rows, so a
-            // fourteen-month-old outlier sat at the top forever, indistinguishable
-            // from something that happened yesterday.
-            if (anomalies.isNotEmpty()) {
-                item { AlertSectionHeading("Unusual spending", anomalies.size, period) }
-                items(anomalies, key = { it.transaction.id }) { anomaly ->
-                    AlertRow(
-                        tint = semantics.caution,
-                        icon = Icons.Default.NotificationsActive,
-                        title = "${anomaly.transaction.merchant} • ${formatMoney(anomaly.transaction.amount)}",
-                        detail = "%.1f× the usual %s for %s".format(
-                            anomaly.ratioToMedian,
-                            formatMoney(anomaly.categoryMedian),
-                            anomaly.transaction.category
-                        ),
-                        timestamp = anomaly.transaction.timestamp,
-                        modifier = Modifier.animateItem(),
-                        onClick = { viewModel.showSourceTransactions(listOf(anomaly.transaction.id)) }
-                    )
-                }
-            }
-
-            // Section: Possible duplicate charges (F3.4)
-            if (duplicates.isNotEmpty()) {
-                item { AlertSectionHeading("Possible duplicate charges", duplicates.size, period) }
-                items(duplicates, key = { it.id }) { txn ->
-                    AlertRow(
-                        tint = semantics.negative,
-                        icon = Icons.Default.Warning,
-                        title = "${txn.merchant} • ${formatMoney(txn.amount)}",
-                        detail = "Charged twice for the same amount within 24 hours",
-                        timestamp = txn.timestamp,
-                        modifier = Modifier.animateItem(),
-                        onClick = { viewModel.showSourceTransactions(listOf(txn.id)) }
-                    )
-                }
-            }
-
-            item { Spacer(modifier = Modifier.height(Spacing.section)) }
         }
     }
 }
@@ -496,7 +572,8 @@ private fun AlertRow(
 fun CategoryBreakdownCard(
     period: AnalyticsPeriod,
     slices: List<CategorySlice>,
-    onSliceClick: (CategorySlice) -> Unit
+    onSliceClick: (CategorySlice) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     // The category ramp, not the semantic set. These slices used to be drawn in
     // ArthCrimson / ArthEmerald / ArthGold, so "Groceries" rendered in the red that
@@ -504,10 +581,10 @@ fun CategoryBreakdownCard(
     val sliceColors = VaultTheme.semantics.categorical
     val totalSpent = slices.sumOf { it.total }
 
-    VaultCard {
+    VaultCard(modifier = modifier) {
         CardHeading(
             title = "Where it went",
-            icon = Icons.Default.PieChart,
+            icon = Icons.Outlined.PieChart,
             iconTint = VaultTheme.semantics.info,
             // A percentage is meaningless without the window it covers: 34% of a
             // five-day-old month and 34% of a finished one are different claims.
@@ -625,7 +702,7 @@ fun RecurringItemCard(
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    Icons.Default.Repeat,
+                    Icons.Outlined.Repeat,
                     contentDescription = null,
                     tint = semantics.info,
                     modifier = Modifier.size(20.dp)
@@ -699,14 +776,15 @@ fun RecurringItemCard(
 @Composable
 private fun InternalTransferNote(
     summary: InternalTransferSummary,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     VaultCard(
-        modifier = Modifier.clickable(onClickLabel = "Show these transfers") { onClick() }
+        modifier = modifier.clickable(onClickLabel = "Show these transfers") { onClick() }
     ) {
         CardHeading(
             title = "Between your own accounts",
-            icon = Icons.Default.SwapHoriz
+            icon = Icons.Outlined.SwapHoriz
         )
         Spacer(modifier = Modifier.height(Spacing.tight))
         Text(
@@ -741,13 +819,14 @@ private fun InternalTransferNote(
 private fun CategoryTrendCard(
     period: AnalyticsPeriod,
     trends: List<CategoryTrend>,
-    onTrendClick: (CategoryTrend) -> Unit
+    onTrendClick: (CategoryTrend) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val semantics = VaultTheme.semantics
-    VaultCard {
+    VaultCard(modifier = modifier) {
         CardHeading(
             title = "Category trends",
-            icon = Icons.Default.TrendingUp,
+            icon = Icons.Outlined.TrendingUp,
             iconTint = semantics.info,
             // Naming both windows is what makes this checkable. It used to say "this
             // month against last" while comparing a partial month to a complete one.

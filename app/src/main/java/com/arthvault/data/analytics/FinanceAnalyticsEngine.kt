@@ -223,10 +223,31 @@ class FinanceAnalyticsEngine(
     }
 
     /**
-     * F3.x — the transfers excluded from the totals over [rangeStart]..[rangeEnd].
+     * The user's own money moving between their own accounts, by either route.
+     *
+     * [isInternalTransfer] recognises it by account tail, which works when the message
+     * names both sides. A credit card bill payment never does — the bank alert quotes
+     * the bank account and the card alert quotes the card — so that leg is recognised
+     * by type instead, and needs no confirmed own-account to be excluded: paying a
+     * card bill is not spending under any configuration, because the purchases it
+     * settles are already in the ledger.
+     *
+     * This is the predicate every total uses. [isInternalTransfer] stays as it was,
+     * meaning specifically "a transfer to a tail the user confirmed is theirs".
+     */
+    fun isOwnMoneyMovement(txn: TransactionEntity): Boolean =
+        txn.txnType == TxnType.CARD_PAYMENT || isInternalTransfer(txn)
+
+    /**
+     * F3.x — the money excluded from the totals over [rangeStart]..[rangeEnd].
      *
      * Both directions are counted, because the bug is symmetrical: the outgoing leg
      * inflates spending and the incoming leg inflates income by the same amount.
+     *
+     * Card bill payments are included in this figure precisely because they are
+     * excluded from the totals without the user having confirmed anything. A user
+     * whose card alerts are *not* being ingested needs to be able to see what left
+     * their spending, and this summary is where the screen says so.
      */
     fun summariseInternalTransfers(
         transactions: List<TransactionEntity>,
@@ -236,7 +257,7 @@ class FinanceAnalyticsEngine(
         val internal = transactions.filter {
             it.status == STATUS_POSTED &&
                 it.timestamp in rangeStart..rangeEnd &&
-                isInternalTransfer(it)
+                isOwnMoneyMovement(it)
         }
         return InternalTransferSummary(
             count = internal.size,
@@ -257,7 +278,7 @@ class FinanceAnalyticsEngine(
      */
     private fun postedDebits(transactions: List<TransactionEntity>) =
         transactions.filter {
-            it.direction == "DEBIT" && it.status == STATUS_POSTED && !isInternalTransfer(it)
+            it.direction == "DEBIT" && it.status == STATUS_POSTED && !isOwnMoneyMovement(it)
         }
 
     /**
@@ -535,7 +556,7 @@ class FinanceAnalyticsEngine(
             it.direction == "CREDIT" &&
                 it.status == STATUS_POSTED &&
                 it.txnType != TxnType.REFUND &&
-                !isInternalTransfer(it)
+                !isOwnMoneyMovement(it)
         }
 
     /**
@@ -678,7 +699,7 @@ class FinanceAnalyticsEngine(
         // Committed outflows are the recurring charges still expected before month
         // end — i.e. ones that have not already landed this month.
         val chargedThisMonth = posted
-            .filter { it.direction == "DEBIT" && !isInternalTransfer(it) }
+            .filter { it.direction == "DEBIT" && !isOwnMoneyMovement(it) }
             .map { it.merchant.uppercase().trim() }
             .toSet()
 
@@ -690,7 +711,7 @@ class FinanceAnalyticsEngine(
         // landed this month is money that is going to arrive, and leaving it out is
         // what made the card imply a deficit for anyone paid after the 1st.
         val receivedThisMonth = posted
-            .filter { it.direction == "CREDIT" && it.txnType != TxnType.REFUND && !isInternalTransfer(it) }
+            .filter { it.direction == "CREDIT" && it.txnType != TxnType.REFUND && !isOwnMoneyMovement(it) }
             .map { it.merchant.uppercase().trim() }
             .toSet()
 
@@ -704,7 +725,7 @@ class FinanceAnalyticsEngine(
         val nonRecurringSpentSoFar = posted
             .filter {
                 it.direction == "DEBIT" &&
-                    !isInternalTransfer(it) &&
+                    !isOwnMoneyMovement(it) &&
                     it.merchant.uppercase().trim() !in recurringMerchants
             }
             .sumOf { it.amount }

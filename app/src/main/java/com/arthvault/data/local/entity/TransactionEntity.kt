@@ -18,6 +18,24 @@ object TxnType {
     const val ATM = "ATM"
     const val FEE = "FEE"
     const val INCOME = "INCOME"
+
+    /**
+     * Settling a credit card bill — the money moving from the user's bank to their
+     * card, not a purchase and not income.
+     *
+     * Distinct from [TRANSFER] because the transfer machinery identifies the other
+     * side by account tail (`FinanceAnalyticsEngine.isInternalTransfer` reads it out
+     * of a "Transfer to A/c 1234" label), and a card bill payment names only one
+     * account whichever leg you get: the bank alert quotes the bank account, the card
+     * alert quotes the card. There is no counterparty tail to match, so the type
+     * itself has to carry the meaning.
+     *
+     * Both legs are excluded from spending and from income. The card's purchases are
+     * already in the ledger — card senders are allowlisted by default — so counting
+     * the bill payment as well counts the same rupees twice, and counting the card's
+     * acknowledgement as income counts them a third time with the sign flipped.
+     */
+    const val CARD_PAYMENT = "CARD_PAYMENT"
 }
 
 /**

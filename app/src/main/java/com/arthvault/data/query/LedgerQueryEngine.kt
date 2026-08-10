@@ -55,13 +55,24 @@ class LedgerQueryEngine {
      * income — counting it as income made a ₹4,000 refund read like salary. It is
      * excluded from both sides here: it is not income, and it is not spending
      * either.
+     *
+     * A credit card bill payment is excluded from both sides for the same reason, and
+     * on both legs. The purchases it settles are already in the ledger, so "what did I
+     * spend last month" counted them twice, and the card's acknowledgement of the
+     * payment answered "what came in last month" with money that never arrived. This
+     * has to be stated here as well as in `FinanceAnalyticsEngine`: the query engine
+     * is a second, independent definition of income, and the analytics fix does not
+     * reach it.
      */
     private fun matchesDirection(
         transaction: TransactionEntity,
         direction: QueryDirection
     ): Boolean = when (direction) {
-        QueryDirection.OUT -> transaction.direction == "DEBIT"
+        QueryDirection.OUT ->
+            transaction.direction == "DEBIT" && transaction.txnType != TxnType.CARD_PAYMENT
         QueryDirection.IN ->
-            transaction.direction == "CREDIT" && transaction.txnType != TxnType.REFUND
+            transaction.direction == "CREDIT" &&
+                transaction.txnType != TxnType.REFUND &&
+                transaction.txnType != TxnType.CARD_PAYMENT
     }
 }
