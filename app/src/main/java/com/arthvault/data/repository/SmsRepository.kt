@@ -5,6 +5,11 @@ import android.net.Uri
 import android.provider.Telephony
 import com.arthvault.data.analytics.AnalyticsPeriod
 import com.arthvault.data.analytics.AnomalyItem
+import com.arthvault.data.analytics.BillAnalyticsEngine
+import com.arthvault.data.analytics.BillMonth
+import com.arthvault.data.analytics.BillObligation
+import com.arthvault.data.analytics.BillSettlement
+import com.arthvault.data.analytics.BillTrend
 import com.arthvault.data.analytics.CategorySlice
 import com.arthvault.data.analytics.CategoryTrend
 import com.arthvault.data.analytics.DayBucket
@@ -26,6 +31,7 @@ import com.arthvault.data.local.entity.AdjustmentEntity
 import com.arthvault.data.local.entity.AdjustmentField
 import com.arthvault.data.local.entity.AdjustmentSource
 import com.arthvault.data.local.entity.AppSettingEntity
+import com.arthvault.data.local.entity.BillNoticeEntity
 import com.arthvault.data.local.entity.CategoryEntity
 import com.arthvault.data.local.entity.MerchantRuleEntity
 import com.arthvault.data.local.entity.OwnAccountEntity
@@ -54,6 +60,8 @@ import java.io.FileWriter
 data class ScanResult(
     val newTransactionsCount: Int = 0,
     val unparsedCount: Int = 0,
+    /** Bills that are owed, not paid — counted separately so the two are never added. */
+    val newBillNoticesCount: Int = 0,
     val totalScanned: Int = 0,
     /** Newest inbox timestamp examined — becomes the next watermark. */
     val newestSeen: Long = 0L
@@ -100,9 +108,57 @@ data class AnalyticsResult(
     val categoryBreakdown: List<CategorySlice> = emptyList(),
     /** F3.6 — [period] against the like-for-like earlier window, largest movement first. */
     val categoryTrends: List<CategoryTrend> = emptyList(),
-    /** What was left out of the figures above because it was the user's own money. */
     val internalTransfers: InternalTransferSummary =
         InternalTransferSummary(0, 0.0, 0.0, emptyList())
+)
+
+/**
+ * Everything the Bills screen shows, computed in one pass.
+ *
+ * Deliberately separate from [AnalyticsResult] rather than folded into it. Money owed
+ * and money moved are different quantities, and keeping them in different objects is
+ * what stops a future change adding one to the other — a card statement's purchases are
+ * already in the ledger, so a total combining the two counts the same rupees twice.
+ */
+data class BillInsights(
+    /** Not settled and either already due or due soon. What the screen leads with. */
+    val dueSoon: List<BillObligation> = emptyList(),
+    /** Everything else with a notice against it, newest first — the audit trail. */
+    val settledOrPast: List<BillObligation> = emptyList(),
+    /**
+     * Charges on an established cadence that no biller texts about — subscriptions,
+     * SIPs, autopay. Inferred from the ledger by the existing recurring detector rather
+     * than from any notice, which is why they are listed apart from [dueSoon].
+     */
+    val expectedAutoDebits: List<RecurringItem> = emptyList(),
+    val trends: List<BillTrend> = emptyList(),
+    val monthlyTotals: List<BillMonth> = emptyList(),
+    /** Sum of [dueSoon] amounts. An obligation total, never a spending figure. */
+    val outstandingTotal: Double = 0.0,
+    val hasAnyNotices: Boolean = false
+)
+
+data class BulkRecategorizePreview(
+    val merchantPattern: String,
+    val targetCategory: String,
+    val affectedCount: Int,
+    val totalAmount: Double,
+    val isGenericUnsafe: Boolean,
+    val matchingCriteriaDescription: String,
+    val matchingTransactions: List<TransactionEntity>
+)
+
+/**
+ * What a [SmsRepository.reparseStoredTransactions] pass changed.
+ *
+ * [skippedUserEdited] is reported rather than hidden: a user who re-parses and sees
+ * fewer corrections than they expected needs to know their own edits were the reason.
+ */
+data class ReparseResult(
+    val examined: Int = 0,
+    val merchantsCorrected: Int = 0,
+    val categoriesCorrected: Int = 0,
+    val skippedUserEdited: Int = 0
 )
 
 class SmsRepository(private val context: Context) {
@@ -119,6 +175,7 @@ class SmsRepository(private val context: Context) {
     private val adjustmentDao = db.adjustmentDao()
     private val appSettingDao = db.appSettingDao()
     private val ownAccountDao = db.ownAccountDao()
+    private val billNoticeDao = db.billNoticeDao()
 
     private val parserEngine = SmsParserEngine()
 
@@ -132,6 +189,12 @@ class SmsRepository(private val context: Context) {
      * changed their mind about.
      */
     private val analyticsEngine = FinanceAnalyticsEngine()
+
+    /**
+     * Stateless, unlike [FinanceAnalyticsEngine] — a bill's settlement does not depend
+     * on which accounts the user has marked as their own, so this one can be held.
+     */
+    private val billEngine = BillAnalyticsEngine()
 
     /**
      * T3.3 — the ledger as the user sees it: stored rows folded with their
@@ -241,9 +304,15 @@ class SmsRepository(private val context: Context) {
                 transactionDao.insertTransaction(parseResult.parsedTransaction)
                 return@withContext true
             }
+        } else if (parseResult.billNotice != null) {
+            // The unique index on noticeHash does the de-duplication, so a re-sent
+            // reminder costs one ignored insert rather than a read-then-write race.
+            billNoticeDao.insert(parseResult.billNotice)
         } else if (parseResult.unparsedSms != null) {
             unparsedSmsDao.insertUnparsedSms(parseResult.unparsedSms)
         }
+        // False, deliberately: the return value is "a transaction was added", and a
+        // bill that is owed is not one. Every caller that counts this counts spending.
         return@withContext false
     }
 
@@ -272,6 +341,113 @@ class SmsRepository(private val context: Context) {
         result
     }
 
+    /**
+     * Re-runs the current parser over rows already in the ledger.
+     *
+     * Ingestion de-duplicates on `sha256(sender|body|minute)`, which is deliberately
+     * independent of what the parser made of the message. That is right for avoiding
+     * duplicate rows and wrong for everything else: a row parsed by an older ruleset
+     * keeps its answer forever, because a rescan finds the hash already present and
+     * skips the message before the parser is reached. `rescanEntireInbox` does not
+     * help — it only rewinds the watermark, and the hash check still short-circuits.
+     *
+     * Corrections are appended as adjustments rather than written over the rows:
+     * `TransactionDao` has no `@Update` by design (T3.3), and the original parse stays
+     * recoverable. Anything the user has already decided by hand ([AdjustmentSource.USER])
+     * or through a bulk rule ([AdjustmentSource.RULE]) is left alone — a parser
+     * improvement is not grounds to overrule them.
+     */
+    suspend fun reparseStoredTransactions(): ReparseResult = withContext(Dispatchers.IO) {
+        val stored = transactionDao.getAllTransactions().first()
+        val adjustmentsByTxn = adjustmentDao.getAll().first().groupBy { it.transactionId }
+        val merchantRules = merchantRuleDao.getAllRulesList()
+        val parserRules = parserRuleDao.getActiveRulesList()
+        val now = System.currentTimeMillis()
+
+        val pending = mutableListOf<AdjustmentEntity>()
+        var merchantsCorrected = 0
+        var categoriesCorrected = 0
+        var skippedUserEdited = 0
+        var examined = 0
+
+        for (txn in stored) {
+            val existing = adjustmentsByTxn[txn.id].orEmpty()
+            if (existing.any { it.field == AdjustmentField.VOID }) continue
+
+            val effective = AdjustmentFolder.apply(listOf(txn), existing).firstOrNull() ?: continue
+            examined++
+
+            // Manual entries carry a note, not a bank message; there is nothing to re-parse.
+            if (txn.sender == MANUAL_SENDER) continue
+
+            val reparsed = parserEngine.parseMessage(
+                sender = txn.sender,
+                body = txn.rawMessage,
+                timestamp = txn.timestamp,
+                merchantRules = merchantRules,
+                parserRules = parserRules
+            ).parsedTransaction ?: continue
+
+            fun decidedByUser(field: String) = existing.any {
+                it.field == field &&
+                    (it.source == AdjustmentSource.USER || it.source == AdjustmentSource.RULE)
+            }
+
+            var touchedUserField = false
+
+            // Never trade a real payee for a placeholder or an issuer name: a rule
+            // change that makes one message parse better can make another parse worse,
+            // and a re-parse that degrades the ledger is worse than one that skips it.
+            val degrades = SmsParserEngine.isUnsafeAsRulePattern(reparsed.merchant) &&
+                !SmsParserEngine.isUnsafeAsRulePattern(effective.merchant)
+
+            if (!degrades && reparsed.merchant != effective.merchant) {
+                if (decidedByUser(AdjustmentField.MERCHANT)) {
+                    touchedUserField = true
+                } else {
+                    pending += AdjustmentEntity(
+                        transactionId = txn.id,
+                        field = AdjustmentField.MERCHANT,
+                        oldValue = effective.merchant,
+                        newValue = reparsed.merchant,
+                        reason = "Re-parsed under current rules",
+                        createdAt = now,
+                        source = AdjustmentSource.REPARSE
+                    )
+                    merchantsCorrected++
+                }
+            }
+
+            if (reparsed.category != effective.category) {
+                if (decidedByUser(AdjustmentField.CATEGORY)) {
+                    touchedUserField = true
+                } else {
+                    pending += AdjustmentEntity(
+                        transactionId = txn.id,
+                        field = AdjustmentField.CATEGORY,
+                        oldValue = effective.category,
+                        newValue = reparsed.category,
+                        reason = "Re-parsed under current rules",
+                        createdAt = now,
+                        source = AdjustmentSource.REPARSE
+                    )
+                    categoriesCorrected++
+                }
+            }
+
+            if (touchedUserField) skippedUserEdited++
+        }
+
+        if (pending.isNotEmpty()) adjustmentDao.insertAll(pending)
+
+        ReparseResult(
+            examined = examined,
+            merchantsCorrected = merchantsCorrected,
+            categoriesCorrected = categoriesCorrected,
+            skippedUserEdited = skippedUserEdited
+        )
+    }
+
     /** Forces a re-read of the whole inbox, ignoring the watermark. */
     suspend fun rescanEntireInbox(): ScanResult = withContext(Dispatchers.IO) {
         val result = scanDeviceSmsInbox(since = 0L)
@@ -287,6 +463,7 @@ class SmsRepository(private val context: Context) {
     suspend fun scanDeviceSmsInbox(since: Long = 0L): ScanResult = withContext(Dispatchers.IO) {
         var newTxns = 0
         var unparsed = 0
+        var newBills = 0
         var totalScanned = 0
         var newestSeen = since
         try {
@@ -343,6 +520,8 @@ class SmsRepository(private val context: Context) {
                                 transactionDao.insertTransaction(parseResult.parsedTransaction)
                                 newTxns++
                             }
+                        } else if (parseResult.billNotice != null) {
+                            if (billNoticeDao.insert(parseResult.billNotice) != -1L) newBills++
                         } else if (parseResult.unparsedSms != null) {
                             val existingUnparsed = unparsedSmsDao.getUnreviewedSms().first().find { u -> u.rawMessage == body }
                             if (existingUnparsed == null) {
@@ -359,6 +538,7 @@ class SmsRepository(private val context: Context) {
         return@withContext ScanResult(
             newTransactionsCount = newTxns,
             unparsedCount = unparsed,
+            newBillNoticesCount = newBills,
             totalScanned = totalScanned,
             newestSeen = newestSeen
         )
@@ -499,6 +679,201 @@ class SmsRepository(private val context: Context) {
      * it replaced, so the original classification is always recoverable and a
      * bulk edit made by mistake is legible after the fact.
      */
+    /**
+     * The merchant string a bulk re-categorisation should actually key on.
+     *
+     * A row whose merchant is a bank name ("using ICICI Bank") or a generic token is
+     * useless as a pattern — it identifies the issuer, not the payee — so the raw
+     * message is re-parsed to recover the real one.
+     *
+     * [parserRules] must be the live rules. Since T2.2 the engine carries no built-in
+     * patterns: every rule arrives as data, and the loop that builds a transaction is
+     * `for (rule in parserRules)`. This used to pass `emptyList()`, so the re-parse
+     * returned null every single time and the recovery path could never fire. Worse
+     * than a no-op — the bank name survived as the pattern, and [matchesTxnPattern]
+     * then matched it against every message body from that bank.
+     */
+    suspend fun resolveMerchantPattern(
+        merchant: String,
+        rawMessage: String?,
+        sender: String = UNKNOWN_SENDER
+    ): String = resolveMerchantPattern(
+        merchant, rawMessage, sender, parserRuleDao.getActiveRulesList()
+    )
+
+    fun resolveMerchantPattern(
+        merchant: String,
+        rawMessage: String?,
+        sender: String,
+        parserRules: List<ParserRuleEntity>
+    ): String {
+        val cleanMerchant = merchant.trim()
+        if (SmsParserEngine.isBankNameOnly(cleanMerchant) || SmsParserEngine.isGenericOrUnsafeMerchant(cleanMerchant)) {
+            if (!rawMessage.isNullOrBlank()) {
+                // The real sender, not a placeholder: a user-authored rule carries a
+                // senderPattern, and senderMatchesRule would skip it for a stand-in.
+                val parsed = parserEngine.parseMessage(
+                    sender.ifBlank { UNKNOWN_SENDER },
+                    rawMessage,
+                    System.currentTimeMillis(),
+                    emptyList(),
+                    parserRules
+                )
+                parsed.parsedTransaction?.merchant?.let { extracted ->
+                    if (extracted != SmsParserEngine.UNKNOWN_MERCHANT &&
+                        !SmsParserEngine.isBankNameOnly(extracted) &&
+                        !SmsParserEngine.isGenericOrUnsafeMerchant(extracted)
+                    ) {
+                        return extracted
+                    }
+                }
+            }
+        }
+        return cleanMerchant
+    }
+
+    fun matchesMerchantPattern(txnMerchant: String, targetMerchant: String): Boolean {
+        val cleanTxn = txnMerchant.trim().uppercase(java.util.Locale.ROOT)
+        val cleanTarget = targetMerchant.trim().uppercase(java.util.Locale.ROOT)
+        if (cleanTarget.isBlank()) return false
+        if (SmsParserEngine.isGenericOrUnsafeMerchant(cleanTarget)) {
+            return cleanTxn == cleanTarget
+        }
+        if (cleanTxn == cleanTarget) return true
+        return try {
+            val regex = Regex("\\b" + Regex.escape(cleanTarget) + "\\b", RegexOption.IGNORE_CASE)
+            regex.containsMatchIn(cleanTxn)
+        } catch (_: Exception) {
+            cleanTxn.contains(cleanTarget, ignoreCase = true)
+        }
+    }
+
+    /**
+     * Whether [txn] belongs to the bulk edit keyed on [targetMerchant].
+     *
+     * The message body is searched as well as the merchant name, because a payee the
+     * parser failed to lift out of a message is still named *in* it — that is the only
+     * way a badly-parsed row can be swept up by a correction aimed at the right name.
+     *
+     * But not for a bank name. "using ICICI Bank" appears verbatim in every ICICI card
+     * SMS, so body matching on it selected the issuer's entire history regardless of
+     * payee — a bulk edit aimed at one merchant silently re-filed everything from that
+     * bank. A pattern that names the issuer rather than the payee is matched against
+     * the merchant field alone, where it can only hit rows that really carry it.
+     */
+    fun matchesTxnPattern(txn: TransactionEntity, targetMerchant: String): Boolean {
+        val cleanTarget = targetMerchant.trim().uppercase(java.util.Locale.ROOT)
+        if (cleanTarget.isBlank()) return false
+
+        val cleanTxnMerchant = txn.merchant.trim().uppercase(java.util.Locale.ROOT)
+        val cleanRawMessage = txn.rawMessage.trim().uppercase(java.util.Locale.ROOT)
+
+        if (SmsParserEngine.isGenericOrUnsafeMerchant(cleanTarget)) {
+            return cleanTxnMerchant == cleanTarget
+        }
+        if (cleanTxnMerchant == cleanTarget || cleanTxnMerchant.contains(cleanTarget)) return true
+
+        val searchBody = !SmsParserEngine.isBankNameOnly(cleanTarget)
+
+        return try {
+            val regex = Regex("\\b" + Regex.escape(cleanTarget) + "\\b", RegexOption.IGNORE_CASE)
+            regex.containsMatchIn(cleanTxnMerchant) ||
+                (searchBody && regex.containsMatchIn(cleanRawMessage))
+        } catch (_: Exception) {
+            cleanTxnMerchant.contains(cleanTarget, ignoreCase = true) ||
+                (searchBody && cleanRawMessage.contains(cleanTarget, ignoreCase = true))
+        }
+    }
+
+    suspend fun previewBulkRecategorization(
+        merchant: String,
+        newCategory: String,
+        rawMessage: String? = null,
+        sender: String = UNKNOWN_SENDER
+    ): BulkRecategorizePreview = withContext(Dispatchers.IO) {
+        val effectivePattern = resolveMerchantPattern(merchant, rawMessage, sender)
+        val effective = getAllTransactions().first()
+        val cleanMerchant = effectivePattern.trim()
+
+        // A bank name is as unsafe to generalise from as a generic token: it names the
+        // issuer, so a rule built on it would re-file every future card spend from that
+        // bank. Folding it in here is what keeps the "save rule" checkbox off by
+        // default and the warning visible.
+        val isBankName = SmsParserEngine.isBankNameOnly(cleanMerchant)
+        val isUnsafe = SmsParserEngine.isUnsafeAsRulePattern(effectivePattern)
+
+        val matching = effective.filter { txn ->
+            matchesTxnPattern(txn, effectivePattern) && txn.category != newCategory
+        }
+
+        val criteriaDesc = when {
+            isBankName ->
+                "'$cleanMerchant' names the bank, not the payee — matched against merchant " +
+                    "names only, and no global rule will be created."
+            isUnsafe -> "Broad term '$cleanMerchant' — exact match only (no global rule created)."
+            cleanMerchant.length <= 4 -> "Exact merchant name match for '$cleanMerchant'."
+            else -> "Word boundary pattern match '\\b$cleanMerchant\\b' across merchant names or SMS text."
+        }
+
+        BulkRecategorizePreview(
+            merchantPattern = effectivePattern,
+            targetCategory = newCategory,
+            affectedCount = matching.size,
+            totalAmount = matching.sumOf { it.amount },
+            isGenericUnsafe = isUnsafe,
+            matchingCriteriaDescription = criteriaDesc,
+            matchingTransactions = matching
+        )
+    }
+
+    /**
+     * Selective bulk re-categorisation allowing users to accept a subset of transaction IDs.
+     */
+    suspend fun updateSelectedTransactionCategories(
+        selectedTransactionIds: Set<Long>,
+        newCategory: String,
+        merchantPattern: String,
+        saveGlobalRule: Boolean
+    ) = withContext(Dispatchers.IO) {
+        if (selectedTransactionIds.isEmpty()) return@withContext
+        val effective = getAllTransactions().first()
+        val now = System.currentTimeMillis()
+
+        val targets = effective.filter { it.id in selectedTransactionIds }
+
+        adjustmentDao.insertAll(
+            targets.filter { it.category != newCategory }.map { txn ->
+                AdjustmentEntity(
+                    transactionId = txn.id,
+                    field = AdjustmentField.CATEGORY,
+                    oldValue = txn.category,
+                    newValue = newCategory,
+                    reason = "Bulk re-categorisation of $merchantPattern",
+                    createdAt = now,
+                    source = AdjustmentSource.RULE
+                )
+            }
+        )
+
+        if (saveGlobalRule && !SmsParserEngine.isUnsafeAsRulePattern(merchantPattern)) {
+            merchantRuleDao.insertOrUpdateRule(
+                MerchantRuleEntity(
+                    merchantPattern = merchantPattern.trim(),
+                    assignedCategory = newCategory
+                )
+            )
+        }
+    }
+
+    /**
+     * F2.2/F2.4 — a re-categorisation, recorded rather than applied.
+     *
+     * This used to run an UPDATE over the row (and, in the bulk case, over every
+     * row matching the merchant), destroying whatever the parser had originally
+     * decided. Now each change is one append to `adjustments` carrying the value
+     * it replaced, so the original classification is always recoverable and a
+     * bulk edit made by mistake is legible after the fact.
+     */
     suspend fun updateTransactionCategory(
         id: Long,
         newCategory: String,
@@ -509,7 +884,7 @@ class SmsRepository(private val context: Context) {
         val now = System.currentTimeMillis()
 
         val targets = if (updateAllForMerchant) {
-            effective.filter { it.merchant.contains(merchant, ignoreCase = true) }
+            effective.filter { matchesMerchantPattern(it.merchant, merchant) }
         } else {
             effective.filter { it.id == id }
         }
@@ -528,10 +903,10 @@ class SmsRepository(private val context: Context) {
             }
         )
 
-        if (updateAllForMerchant) {
+        if (updateAllForMerchant && !SmsParserEngine.isUnsafeAsRulePattern(merchant)) {
             merchantRuleDao.insertOrUpdateRule(
                 MerchantRuleEntity(
-                    merchantPattern = merchant,
+                    merchantPattern = merchant.trim(),
                     assignedCategory = newCategory
                 )
             )
@@ -557,7 +932,7 @@ class SmsRepository(private val context: Context) {
                 amount = amount,
                 direction = direction,
                 timestamp = timestamp,
-                sender = "MANUAL_ENTRY",
+                sender = MANUAL_SENDER,
                 merchant = merchant,
                 accountTail = "Cash",
                 channel = channel,
@@ -659,6 +1034,67 @@ class SmsRepository(private val context: Context) {
                 rangeStart = period.range.first,
                 rangeEnd = period.range.last
             )
+        )
+    }
+
+    // --- bills (v6) ---
+
+    fun getBillNotices(): Flow<List<BillNoticeEntity>> = billNoticeDao.getAll()
+
+    suspend fun getBillNoticesByIds(ids: List<Long>): List<BillNoticeEntity> =
+        withContext(Dispatchers.IO) {
+            val wanted = ids.toSet()
+            billNoticeDao.getAllList().filter { it.id in wanted }
+        }
+
+    /**
+     * Phase 9 — obligations, their settlement state, and how they have moved.
+     *
+     * The ledger is read through [getAllTransactions], the adjustment-folded view, for
+     * the same reason `computeAnalytics` does: a payment the user has voided must not
+     * go on marking a bill settled.
+     *
+     * @param dueSoonHorizonDays how far ahead counts as "due soon". Bills already past
+     *   their date are always included regardless — a missed deadline does not stop
+     *   being the most important thing on the screen because it is now in the past.
+     */
+    suspend fun computeBillInsights(
+        now: Long = System.currentTimeMillis(),
+        dueSoonHorizonDays: Int = DUE_SOON_HORIZON_DAYS
+    ): BillInsights = withContext(Dispatchers.IO) {
+        val notices = billNoticeDao.getAllList()
+        val txns = getAllTransactions().first()
+
+        val obligations = billEngine.reconcile(notices, txns)
+
+        val (dueSoon, rest) = obligations.partition { obligation ->
+            // Only a full match retires a bill. LIKELY_PAID means something linked to
+            // this biller settled but not the sum that clears it — the commonest case
+            // being a minimum-due payment on a card, which leaves the balance owed and
+            // accruing interest. Filing that as settled would hide the bill that most
+            // needs looking at.
+            if (obligation.settlement == BillSettlement.PAID) return@partition false
+            // An undated obligation with nothing seen against it is still outstanding.
+            // Dropping it because the biller forgot to name a date would hide a real
+            // bill; it sorts last, which is where an unknown deadline belongs.
+            val days = obligation.daysUntilDue(now) ?: return@partition true
+            days <= dueSoonHorizonDays
+        }
+
+        // Detection needs the whole ledger to establish a cadence; the own-account set
+        // matters because a standing transfer to the user's own savings is not a bill.
+        val autoDebits = FinanceAnalyticsEngine(ownAccountDao.getTails().toSet())
+            .detectRecurringAndPriceHikes(txns)
+            .sortedBy { it.daysUntilNextCharge(now) }
+
+        BillInsights(
+            dueSoon = dueSoon,
+            settledOrPast = rest.sortedByDescending { it.dueDate ?: it.issuedAt },
+            expectedAutoDebits = autoDebits,
+            trends = billEngine.trends(obligations),
+            monthlyTotals = billEngine.monthlyTotals(obligations),
+            outstandingTotal = dueSoon.sumOf { it.amountDue ?: 0.0 },
+            hasAnyNotices = notices.isNotEmpty()
         )
     }
 
@@ -771,7 +1207,8 @@ class SmsRepository(private val context: Context) {
                     customCategories = categoryDao.getAllCategories().first().filter { it.isCustom },
                     customParserRules = parserRuleDao.getActiveRulesList().filter { !it.isSystemRule },
                     senderAllowlist = senderAllowlistDao.getAll().first(),
-                    ownAccounts = ownAccountDao.getAll().first()
+                    ownAccounts = ownAccountDao.getAll().first(),
+                    billNotices = billNoticeDao.getAllList()
                 )
                 val bytes = BackupCodec.encode(payload, passphrase)
                 context.contentResolver.openOutputStream(uri, "wt")?.use { it.write(bytes) }
@@ -815,6 +1252,9 @@ class SmsRepository(private val context: Context) {
                 // transfer as spending again, and disagree with the ledger the
                 // backup was taken from.
                 payload.ownAccounts.forEach { ownAccountDao.upsert(it) }
+                // Ids reassigned on insert, as with transactions; the unique noticeHash
+                // is what makes restoring the same file twice a no-op.
+                billNoticeDao.insertAll(payload.billNotices.map { it.copy(id = 0) })
 
                 RestoreResult(
                     transactionsRestored = fresh.size,
@@ -841,6 +1281,9 @@ class SmsRepository(private val context: Context) {
         // F5.2 — these are account numbers the user told us about. A wipe that left
         // them behind would leave a record of which accounts they hold.
         ownAccountDao.deleteAll()
+        // A notice names an account, a biller and a sum owed. Leaving them would leave
+        // a record of which cards and utilities the user holds.
+        billNoticeDao.deleteAll()
         PendingIngestMarker.clear(context)
 
         File(context.cacheDir, "exports").listFiles()?.forEach { it.delete() }
@@ -980,5 +1423,27 @@ class SmsRepository(private val context: Context) {
         samples.forEach { (hoursAgo, text) ->
             processSingleSms("AD-HDFCBK-S", text, now - (hoursAgo * hour))
         }
+    }
+
+    companion object {
+        /**
+         * Stand-in when a caller re-parses a message it holds no sender for. Bundled
+         * rules are all `.*`-scoped so it costs nothing there; a user-authored rule
+         * with a real senderPattern would not match, which is why every caller that
+         * has the sender passes it.
+         */
+        const val UNKNOWN_SENDER = "UNKNOWN"
+
+        /** Rows the user typed in themselves — there is no bank message behind them. */
+        const val MANUAL_SENDER = "MANUAL_ENTRY"
+
+        /**
+         * How far ahead a bill counts as "due soon".
+         *
+         * Long enough to be actionable on a monthly billing cycle, short enough that
+         * the list is a to-do rather than an inventory. Anything already past its date
+         * is included whatever this is set to.
+         */
+        const val DUE_SOON_HORIZON_DAYS = 21
     }
 }

@@ -24,11 +24,13 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.PieChart
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.SwapHoriz
 import androidx.compose.material.icons.outlined.TrendingUp
 import androidx.compose.material.icons.outlined.Warning
@@ -47,6 +49,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -105,7 +108,9 @@ internal val QUERY_EXAMPLES = listOf(
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun AnalyticsScreen(
-    viewModel: AnalyticsViewModel
+    viewModel: AnalyticsViewModel,
+    isMasked: Boolean = false,
+    onToggleMask: (() -> Unit)? = null
 ) {
     val analytics by viewModel.analytics.collectAsStateWithLifecycle()
     val scope by viewModel.scope.collectAsStateWithLifecycle()
@@ -151,7 +156,7 @@ fun AnalyticsScreen(
                             ) {
                                 Text(txn.merchant, style = MaterialTheme.typography.titleSmall)
                                 Text(
-                                    text = formatDirectedMoney(txn.amount, isCredit),
+                                    text = formatDirectedMoney(txn.amount, isCredit, isMasked),
                                     style = MaterialTheme.typography.moneySmall,
                                     color = semantics.forDirection(isCredit)
                                 )
@@ -174,6 +179,13 @@ fun AnalyticsScreen(
     VaultScaffold(
         title = "Analytics",
         actions = {
+            onToggleMask?.let { toggle ->
+                BarAction(
+                    label = if (isMasked) "Show" else "Hide",
+                    icon = if (isMasked) Icons.Outlined.Lock else Icons.Outlined.Security,
+                    onClick = toggle
+                )
+            }
             BarAction(
                 label = "Recalculate",
                 icon = Icons.Outlined.Refresh,
@@ -287,8 +299,12 @@ fun AnalyticsScreen(
                         // new user sees is the refusal, and there is nothing on screen
                         // telling them what a readable question looks like. Tapping one
                         // fills the field and answers it, so the shape is learned by doing.
+                        val suggestions = remember(question, categoryTrends) {
+                            if (question.isBlank()) QUERY_EXAMPLES
+                            else com.arthvault.data.query.QueryParser(categoryTrends.map { it.category }).getSuggestions(question).ifEmpty { QUERY_EXAMPLES }
+                        }
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.tight)) {
-                            items(QUERY_EXAMPLES) { example ->
+                            items(items = suggestions) { example ->
                                 SuggestionChip(
                                     onClick = {
                                         question = example

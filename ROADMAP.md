@@ -16,9 +16,12 @@ Status legend: **done** · **open** · **blocked**
 | 6 | Analysis quality, trends, and query | done |
 | 7 | Accuracy harness and release hygiene | done |
 | 8 | Make the insights presentable: periods, cash position, time | done |
+| 9a | Capture bills that are *owed*, instead of dropping them | done |
+| 9b | The Bills tab: obligations, settlement, monthly movement | done |
+| 9c | Reminders that leave the app — blocked on a design decision | open |
 
-All phases in this document are now closed. What remains is under "Open questions
-and known gaps" below, which is where the outstanding work actually lives.
+What remains is 9c, plus "Open questions and known gaps" below, which is where the
+rest of the outstanding work lives.
 
 Phase 7 was taken before 5 and 6, for the reason recorded under "Open questions"
 below: both of those change how messages are read and how the numbers are computed,
@@ -330,6 +333,114 @@ digit grouping throughout, paise only on individual transactions.
 **148 tests pass**, up from 129, including seven pinning the window arithmetic that
 the trends bug lived in.
 
+**Phase 9a** — the app stops throwing away the only messages that say what is due.
+
+`SmsParserEngine.DUE_REMINDER` existed to stop a bill that is *owed* being booked as a
+bill that was *paid*, and it was right: "Total Amount Due of Rs 2,783.00 … payable by
+06-Aug-26" had been entering the ledger as ₹2,783 of spend, and the variant that adds
+"Payments are credited within 2 working days" as ₹2,783 of **income**. Its remedy was to
+`return ParseResult()` — no transaction, no review-queue entry, no trace. So the twelve
+due notices in the corpus, the only messages in the whole inbox that carry a deadline,
+were the ones guaranteed to be discarded.
+
+Notices now land in `bill_notices` (schema v6). The guard itself is unchanged: a due
+reminder still produces `parsedTransaction = null`, and a test asserts exactly that
+alongside the capture, because the value of this feature is nowhere near the cost of
+reopening that defect.
+
+*Why a table and not a `txnType`.* Every aggregate in `FinanceAnalyticsEngine` runs
+through `postedDebits`/`postedCredits`, both of which mean "money moved". A statement
+balance entering there re-creates the original bug, and worse: a card statement's
+purchases are already in the ledger — card senders are allowlisted by default — so
+counting the statement as well counts the same rupees twice. This is the reasoning that
+produced `TxnType.CARD_PAYMENT`, applied one level up.
+
+*Identity, mirroring the transactions table.* `noticeHash` (sender + body + day, unique)
+collapses the identical re-sends a biller makes three or four times a cycle. `cycleKey`
+(biller + tail + due day, indexed) groups differently-worded notices into one obligation.
+That is the same split `hash`/`txnHash` already makes. Keying the cycle on the due day
+rather than the amount is deliberate: a reminder re-sent after a part payment quotes a
+smaller total, and that is the same bill in a new state, not a second bill.
+
+*Dates were the new risk.* Nothing in this codebase had ever read a date — a
+transaction's timestamp comes from the SMS envelope, which is unambiguous and always
+present. `BillDateParser` fixes three rules and says why: `dd-mm` never `mm-dd` (fixed by
+region, overridden only when a component above 12 proves otherwise); a day component is
+required, so "statement for Aug 2026" cannot become a deadline of 1 August for a bill
+payable on the 20th; and a missing year is resolved against the **message** timestamp,
+not the current clock, so "due on 05-Jan" sent on 20 December means next January and a
+re-parse of old messages stays stable. `Calendar.isLenient = false`, so 31 February is
+rejected rather than silently becoming 3 March.
+
+*Two amounts, one bill.* Reading "Minimum Amount Due of Rs 140.00" as the bill when the
+total is ₹2,783 understates the obligation twentyfold, which is the worst number this
+feature could put on screen. Labelled totals win; the unlabelled fallback explicitly
+skips whatever the minimum-due pattern already claimed.
+
+*One ordering change with a real consequence.* `NON_TRANSACTIONAL` was split into
+`OTP_MARKER` and `PROMO_MARKER`, and the due-reminder check now sits between them. OTP
+wording is exclusive to credentials and its verdict stays final. Marketing wording is
+not: utility and telecom billers routinely append a payment link to a genuine notice, and
+tested first, "click to" threw the whole bill away. Tested after, an advert that quotes
+no amount due and no deadline never satisfies the reminder pattern anyway — the PhonePe
+cashback promo in the corpus is still dropped, and a test pins it.
+
+A notice naming neither a sum nor a date is still discarded. "Your statement is ready.
+Login to view" is a notification about a notification.
+
+**Phase 9b** — the tab, and the three states it is willing to report.
+
+*Settlement is three-valued, and the third value is the point.* A bill settled by
+autopay, by netbanking, or from a bank whose alerts are not allowlisted produces no SMS
+at all, so the ledger genuinely cannot tell "not paid" from "paid invisibly". The chip
+reads **"No payment seen"**, never "Unpaid" or "Overdue" — the first is an observation
+about the ledger, the second an accusation about the user, and being wrong about the
+second costs more trust than any wrong total, because a total can be checked.
+
+*Every candidate payment needs an identity link.* Matching on amount alone was tried and
+rejected: an unrelated ₹2,783 purchase in the same fortnight would mark a card bill
+settled, and a false "paid" is discovered in the form of a late fee. A candidate must
+match by transaction type (`CARD_PAYMENT` against a card notice), account tail, or payee
+name. The type arm is load-bearing — a card bill names only one account whichever leg
+arrives, so the tail can never match on both sides. Amount tolerance is 2%, tighter than
+the spending side's 15%, because a bill names an exact figure and a looser band starts
+calling a minimum-due payment a settled bill.
+
+*Only a full match retires a bill.* "Part paid" stays in the due list rather than moving
+to the settled one. The commonest way to reach that state is paying the minimum due on a
+card, which leaves the balance owed and accruing interest — filing it as settled would
+hide the bill that most needs looking at.
+
+*A trend needs three cycles.* Two bills make one comparison, and one comparison cannot
+tell a real rise from the ordinary variation a metered bill has every month — an
+electricity bill is higher in May than April because of the weather. Below three cycles
+the card shows the figures and declines to call them a direction. Same evidence bar as
+`MIN_CHARGES_FOR_RECURRING`, for the same reason.
+
+*Trends run over obligations, not notices.* Four reminders about one ₹12,340 statement
+are one bill; trending on notices would report a fourfold rise every time a biller sent a
+chaser. A test pins that.
+
+*Monthly totals are bucketed by due date, not issue date.* A statement generated on
+28 July and payable on 15 August is an August outgoing.
+
+*What came free.* "Expected auto-debits" is `detectRecurringAndPriceHikes` +
+`nextExpectedTimestamp`, both built in Phase 6 and previously rendering as one line of
+text. Subscriptions, SIPs and autopay announce nothing, so inference is the only source
+there is — the section says so on screen rather than presenting a projected cadence and a
+biller's stated deadline as the same kind of fact.
+
+`fullLocalWipe` clears `bill_notices` (they name accounts, billers and sums owed) and the
+`.avault` backup carries them — dropping them would lose the only record of what a
+settled bill *was*, which is the history the trends are computed from. Bills is a fifth
+bottom-nav destination, which is Material 3's maximum; anything further has to displace
+something.
+
+**261 tests pass**, up from 241. Parser accuracy unchanged at **0.9993**. Release APK
+**11.94 MB** against the 30 MB budget. Declared permissions unchanged: `READ_SMS`,
+`RECEIVE_SMS`, `USE_BIOMETRIC`, `USE_FINGERPRINT`. No `INTERNET`, no notification
+permission, no background work — see 9c under "Open questions".
+
 ---
 
 ---
@@ -337,6 +448,42 @@ the trends bug lived in.
 ## Open questions and known gaps
 
 These are decisions or debts not owned by any phase above.
+
+- **Phase 9c is blocked on one decision, and it is architectural rather than cosmetic.**
+  The database key is auth-bound with a 30-second validity window, so a background
+  worker *physically cannot* read the ledger — the Keystore hardware refuses. This is
+  the same constraint `SmsReceiver` is built around. A conventional "₹12,340 due in 3
+  days" push therefore requires the amount, biller and date to live outside SQLCipher,
+  in SharedPreferences or WorkManager's own unencrypted database, and then to be
+  rendered on a lock screen. That inverts the app's premise for a convenience.
+  The ladder, of which only the first rung is built:
+  1. **At-unlock digest** — the Bills tab and a nav badge. Zero new permissions, zero
+     leakage, and for an app opened regularly it covers most of the value. *Done.*
+  2. **Content-free scheduled nudge** — `POST_NOTIFICATIONS` only. At unlock, when the
+     database is readable, compute the reminder instants and schedule inexact
+     WorkManager jobs with an **empty payload**; the notification reads "A payment is
+     due soon — open Arth Vault". What reaches disk and lock screen is a bare
+     timestamp. *Not built — needs the decision.*
+  3. **Rich notifications.** Rejected: plaintext financial data at rest outside the
+     vault. `SCHEDULE_EXACT_ALARM` is separately out — a restricted Play permission
+     whose allowed-use policy bill reminders do not clearly satisfy, and inexact
+     scheduling is fine three days ahead.
+- **Only credit cards are evidenced.** All twelve due notices in the corpus are card
+  statements. `BillKind.UTILITY`, `TELECOM`, `INSURANCE` and `LOAN` are implemented
+  because the patterns are cheap and the alternative is filing a BESCOM bill under
+  "OTHER", but no real electricity, postpaid or broadband SMS has ever been tested
+  against them — the one utility case in `BillNoticeCaptureTest` is written from the
+  shape such messages are expected to take, which is not the same as evidence. This is
+  the binding constraint on the bill analytics being worth anything, and the fix is
+  collection, not code: add real messages to `sms_corpus.jsonl` as they arrive.
+- **There is no accuracy gate on bill extraction.** `ParserAccuracyTest` scores the
+  transaction fields per field and fails the build below 0.95. Bills have unit tests but
+  no equivalent gate, so a regression in due-date extraction would pass CI. It should
+  get one once the corpus has enough non-card notices to make the score mean something.
+- **A bill paid in part, then in full, reads as "Part paid".** The reconciler reports the
+  strongest single match rather than summing candidates. Summing is the obvious fix and
+  was not taken: two payments that happen to total the bill are not proof it was cleared,
+  and the failure mode of guessing wrong here is a bill the user thinks is settled.
 
 - **Merchant extraction is the parser's weakest field, and the corpus is the only
   thing that says so.** At 0.9993 overall, merchant sits at 0.994 while every other

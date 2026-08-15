@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.ArrowUpward
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.MarkEmailUnread
 import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material.icons.outlined.ReceiptLong
@@ -100,7 +101,9 @@ import com.arthvault.ui.viewmodel.LedgerViewModel
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LedgerScreen(
-    viewModel: LedgerViewModel
+    viewModel: LedgerViewModel,
+    isMasked: Boolean = false,
+    onToggleMask: (() -> Unit)? = null
 ) {
     val transactions by viewModel.filteredTransactions.collectAsStateWithLifecycle()
     val unreviewedSms by viewModel.unreviewedSms.collectAsStateWithLifecycle()
@@ -113,6 +116,7 @@ fun LedgerScreen(
     var showUnparsedSheet by remember { mutableStateOf(false) }
     var selectedTxnForDetail by remember { mutableStateOf<TransactionEntity?>(null) }
     var showCategoryDialogForTxn by remember { mutableStateOf<TransactionEntity?>(null) }
+    var pendingBulkPreview by remember { mutableStateOf<com.arthvault.data.repository.BulkRecategorizePreview?>(null) }
     // Voiding a transaction is a ledger correction, not a UI tidy-up. It used to
     // fire straight from a 30dp icon sitting next to another 30dp icon.
     var pendingVoid by remember { mutableStateOf<TransactionEntity?>(null) }
@@ -124,6 +128,13 @@ fun LedgerScreen(
     VaultScaffold(
         title = "Ledger",
         actions = {
+            onToggleMask?.let { toggle ->
+                BarAction(
+                    label = if (isMasked) "Show" else "Hide",
+                    icon = if (isMasked) Icons.Outlined.Lock else Icons.Outlined.Security,
+                    onClick = toggle
+                )
+            }
             ScanInboxAction(viewModel = viewModel, onScanningChange = { scanning = it })
             if (BuildConfig.DEBUG) {
                 val snackbar = LocalSnackbar.current
@@ -221,7 +232,13 @@ fun LedgerScreen(
             categories = categories.map { it.name },
             onDismiss = { showCategoryDialogForTxn = null },
             onPick = { category, applyToAll ->
-                viewModel.updateCategory(txn.id, category, txn.merchant, applyToAll)
+                if (applyToAll) {
+                    viewModel.previewBulkRecategorization(
+                        txn.merchant, category, txn.rawMessage, txn.sender
+                    ) { preview -> pendingBulkPreview = preview }
+                } else {
+                    viewModel.updateCategory(txn.id, category, txn.merchant, false)
+                }
                 showCategoryDialogForTxn = null
             },
             onCreate = { name, applyToAll ->
@@ -230,10 +247,32 @@ fun LedgerScreen(
                 // the repository is what decides.
                 viewModel.addCategory(name) { outcome ->
                     if (outcome is AddCategoryOutcome.Added) {
-                        viewModel.updateCategory(txn.id, outcome.name, txn.merchant, applyToAll)
+                        if (applyToAll) {
+                            viewModel.previewBulkRecategorization(
+                                txn.merchant, outcome.name, txn.rawMessage, txn.sender
+                            ) { preview -> pendingBulkPreview = preview }
+                        } else {
+                            viewModel.updateCategory(txn.id, outcome.name, txn.merchant, false)
+                        }
                     }
                 }
                 showCategoryDialogForTxn = null
+            }
+        )
+    }
+
+    pendingBulkPreview?.let { preview ->
+        RecategorizePreviewDialog(
+            preview = preview,
+            onDismiss = { pendingBulkPreview = null },
+            onConfirmWithAuth = { selectedIds, saveGlobalRule ->
+                viewModel.updateSelectedTransactionCategories(
+                    selectedTransactionIds = selectedIds,
+                    newCategory = preview.targetCategory,
+                    merchantPattern = preview.merchantPattern,
+                    saveGlobalRule = saveGlobalRule
+                )
+                pendingBulkPreview = null
             }
         )
     }
@@ -308,12 +347,20 @@ private fun rememberInboxScan(
 
     val runScan = {
         onScanningChange(true)
-        viewModel.scanInbox { res ->
+        viewModel.scanInbox { res, reparse ->
             onScanningChange(false)
+            // Corrections to rows already in the ledger are reported ahead of "up to
+            // date": a scan that imports nothing but re-files eleven transactions has
+            // done something, and saying "everything already up to date" would be a lie.
+            val corrected = reparse.merchantsCorrected + reparse.categoriesCorrected
             snackbar.show(
                 when {
+                    res.newTransactionsCount > 0 && corrected > 0 ->
+                        "Imported ${res.newTransactionsCount} new transactions and re-parsed $corrected existing ones"
                     res.newTransactionsCount > 0 ->
                         "Imported ${res.newTransactionsCount} new transactions from ${res.totalScanned} messages"
+                    corrected > 0 ->
+                        "Re-parsed $corrected existing transactions under the current rules"
                     res.totalScanned > 0 ->
                         "Scanned ${res.totalScanned} messages — everything already up to date"
                     else -> "No messages found in your inbox"
@@ -714,14 +761,15 @@ fun TransactionCard(
             Spacer(modifier = Modifier.width(Spacing.tight))
 
             Column(horizontalAlignment = Alignment.End) {
+                val isMasked = com.arthvault.ui.components.LocalPrivacyMasking.current
                 Text(
-                    text = formatDirectedMoney(transaction.amount, isCredit),
+                    text = formatDirectedMoney(transaction.amount, isCredit, isMasked),
                     style = MaterialTheme.typography.moneyMedium,
                     color = tint
                 )
                 transaction.balanceAfter?.let { balance ->
                     Text(
-                        text = "Bal ${formatMoney(balance)}",
+                        text = "Bal ${formatMoney(balance, isMasked)}",
                         style = MaterialTheme.typography.numeric,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

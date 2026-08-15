@@ -141,12 +141,19 @@ class AdjustmentFolderTest {
     }
 
     @Test
-    fun `voided ids are reported separately for the audit view`() {
-        val adjustments = listOf(
-            adjustment(1, AdjustmentField.VOID, null, at = 10),
-            adjustment(2, AdjustmentField.CATEGORY, "Shopping", at = 11)
-        )
-        assertEquals(setOf(1L), AdjustmentFolder.voidedIds(adjustments))
-        assertEquals(setOf(2L), AdjustmentFolder.adjustedIds(adjustments))
+    fun `selective bulk adjustments only update selected transaction ids`() {
+        val t1 = txn(1, "SWIGGY", "Uncategorised")
+        val t2 = txn(2, "SWIGGY", "Uncategorised")
+        val t3 = txn(3, "SWIGGY", "Uncategorised")
+
+        val selectedIds = setOf(1L, 3L)
+        val adjustments = selectedIds.map { id ->
+            adjustment(id, AdjustmentField.CATEGORY, "Food & Dining", at = 10, oldValue = "Uncategorised")
+        }
+
+        val folded = AdjustmentFolder.apply(listOf(t1, t2, t3), adjustments)
+        assertEquals("Food & Dining", folded.first { it.id == 1L }.category)
+        assertEquals("Uncategorised", folded.first { it.id == 2L }.category)
+        assertEquals("Food & Dining", folded.first { it.id == 3L }.category)
     }
 }

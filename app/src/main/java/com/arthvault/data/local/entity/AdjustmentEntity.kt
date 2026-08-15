@@ -23,6 +23,17 @@ object AdjustmentSource {
 
     /** Written by a schema migration reconstructing history it could not fully know. */
     const val MIGRATION = "MIGRATION"
+
+    /**
+     * Written by a re-parse of a stored row under improved parser rules.
+     *
+     * Ingestion de-duplicates on a hash of sender, body and minute — deliberately
+     * independent of the parser — so a row already in the ledger is never re-read
+     * from the inbox and a parser fix would otherwise never reach it. Re-parsing
+     * records its corrections here rather than rewriting the row, and yields to
+     * [USER] and [RULE] on any field the user has already decided.
+     */
+    const val REPARSE = "REPARSE"
 }
 
 /**

@@ -3,6 +3,8 @@ package com.arthvault
 import com.arthvault.data.backup.BackupCodec
 import com.arthvault.data.backup.BackupFormatException
 import com.arthvault.data.backup.BackupPayload
+import com.arthvault.data.local.entity.BillKind
+import com.arthvault.data.local.entity.BillNoticeEntity
 import com.arthvault.data.local.entity.CategoryEntity
 import com.arthvault.data.local.entity.MerchantRuleEntity
 import com.arthvault.data.local.entity.OwnAccountEntity
@@ -61,7 +63,39 @@ class BackupCodecTest {
         merchantRules = listOf(MerchantRuleEntity("SWIGGY", "Food & Dining", 42L)),
         customCategories = listOf(CategoryEntity("Aquarium", "Pets", "#00BCD4", isCustom = true)),
         senderAllowlist = listOf(SenderAllowlistEntity("HDFCBK", "HDFC Bank")),
-        ownAccounts = listOf(OwnAccountEntity("0662", "HDFC Current", 99L))
+        ownAccounts = listOf(OwnAccountEntity("0662", "HDFC Current", 99L)),
+        billNotices = listOf(
+            BillNoticeEntity(
+                billerKey = "ICICIBANKCREDITCARD",
+                billerLabel = "ICICI Bank Credit Card",
+                kind = BillKind.CARD,
+                accountTail = "7009",
+                amountDue = 2783.0,
+                minAmountDue = 140.0,
+                dueDate = 1_754_438_400_000L,
+                billingPeriodLabel = "Aug 2026",
+                issuedAt = 1_754_000_000_000L,
+                sender = "AD-ICICIB-S",
+                rawMessage = "Total Amount Due of Rs 2,783.00 by 06-Aug-26",
+                noticeHash = "n1",
+                cycleKey = "c1"
+            ),
+            BillNoticeEntity(
+                billerKey = "ONECRD",
+                billerLabel = "OneCard",
+                kind = BillKind.CARD,
+                accountTail = null,
+                amountDue = null,
+                minAmountDue = null,
+                dueDate = null,
+                billingPeriodLabel = null,
+                issuedAt = 1_754_100_000_000L,
+                sender = "AD-ONECRD-S",
+                rawMessage = "statement is ready",
+                noticeHash = "n2",
+                cycleKey = "c2"
+            )
+        )
     )
 
     private val passphrase = "correct horse battery".toCharArray()
@@ -75,6 +109,37 @@ class BackupCodecTest {
         assertEquals(1, restored.customCategories.size)
         assertEquals(1, restored.senderAllowlist.size)
         assertEquals(1, restored.ownAccounts.size)
+        assertEquals(2, restored.billNotices.size)
+    }
+
+    @Test
+    fun `bill notices survive, including the ones that stated nothing`() {
+        val restored = BackupCodec.decode(BackupCodec.encode(payload, passphrase), passphrase)
+
+        val card = restored.billNotices.first { it.noticeHash == "n1" }
+        assertEquals(2783.0, card.amountDue!!, 0.001)
+        assertEquals(140.0, card.minAmountDue!!, 0.001)
+        assertEquals(1_754_438_400_000L, card.dueDate)
+        assertEquals("7009", card.accountTail)
+        assertEquals("Aug 2026", card.billingPeriodLabel)
+
+        // The nullable case is the one worth pinning. A notice that quoted no amount is
+        // common — "your statement is ready" — and restoring it as ₹0 would put a bill
+        // on screen that looks settled when nothing is known about it at all.
+        val bare = restored.billNotices.first { it.noticeHash == "n2" }
+        assertEquals(null, bare.amountDue)
+        assertEquals(null, bare.minAmountDue)
+        assertEquals(null, bare.dueDate)
+        assertEquals(null, bare.accountTail)
+        assertEquals(null, bare.billingPeriodLabel)
+    }
+
+    @Test
+    fun `a backup written before v6 restores as no bills`() {
+        val legacy = BackupCodec.fromJson(
+            BackupCodec.toJson(payload.copy(billNotices = emptyList()))
+        )
+        assertTrue(legacy.billNotices.isEmpty())
     }
 
     @Test

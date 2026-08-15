@@ -1,6 +1,8 @@
 package com.arthvault.data.backup
 
 import com.arthvault.data.crypto.VaultCrypto
+import com.arthvault.data.local.entity.BillKind
+import com.arthvault.data.local.entity.BillNoticeEntity
 import com.arthvault.data.local.entity.CategoryEntity
 import com.arthvault.data.local.entity.MerchantRuleEntity
 import com.arthvault.data.local.entity.OwnAccountEntity
@@ -33,6 +35,16 @@ data class BackupPayload(
      * restored ledger would disagree with the one that was backed up.
      */
     val ownAccounts: List<OwnAccountEntity> = emptyList(),
+    /**
+     * Bills the user has been told they owe (v6).
+     *
+     * Carried for the same reason [ownAccounts] is: a restore that dropped them would
+     * come back with an empty Bills tab and no way to rebuild it except by rescanning
+     * an inbox that may be on a different phone. The notices are also the only record
+     * of what a bill *was* — a settled cycle's amount is not recoverable from the
+     * payment alone, so the history the trends are computed from would be gone.
+     */
+    val billNotices: List<BillNoticeEntity> = emptyList(),
     val createdAt: Long = System.currentTimeMillis()
 )
 
@@ -175,6 +187,29 @@ object BackupCodec {
             }
         })
 
+        root.put("billNotices", JSONArray().apply {
+            payload.billNotices.forEach { b ->
+                put(JSONObject().apply {
+                    put("billerKey", b.billerKey)
+                    put("billerLabel", b.billerLabel)
+                    put("kind", b.kind)
+                    // JSONObject.put(String, Any?) with null removes the key, which is
+                    // exactly right: an absent key reads back as null, and a notice that
+                    // stated no amount must not restore as one that stated zero.
+                    put("accountTail", b.accountTail)
+                    b.amountDue?.let { put("amountDue", it) }
+                    b.minAmountDue?.let { put("minAmountDue", it) }
+                    b.dueDate?.let { put("dueDate", it) }
+                    put("billingPeriodLabel", b.billingPeriodLabel)
+                    put("issuedAt", b.issuedAt)
+                    put("sender", b.sender)
+                    put("rawMessage", b.rawMessage)
+                    put("noticeHash", b.noticeHash)
+                    put("cycleKey", b.cycleKey)
+                })
+            }
+        })
+
         return root.toString()
     }
 
@@ -261,6 +296,27 @@ object BackupCodec {
                     tail = o.getString("tail"),
                     label = o.optString("label", "Account"),
                     markedAt = o.optLong("markedAt", System.currentTimeMillis())
+                )
+            },
+            // Likewise absent before v6. The nullable numbers are read back through
+            // `has` rather than a sentinel default: a notice that quoted no amount is a
+            // real and common case, and restoring it as ₹0 would put a settled-looking
+            // bill on the screen.
+            billNotices = root.optJSONArray("billNotices").map { o ->
+                BillNoticeEntity(
+                    billerKey = o.getString("billerKey"),
+                    billerLabel = o.optString("billerLabel", o.getString("billerKey")),
+                    kind = o.optString("kind", BillKind.OTHER),
+                    accountTail = o.optNullableString("accountTail"),
+                    amountDue = if (o.has("amountDue")) o.getDouble("amountDue") else null,
+                    minAmountDue = if (o.has("minAmountDue")) o.getDouble("minAmountDue") else null,
+                    dueDate = if (o.has("dueDate")) o.getLong("dueDate") else null,
+                    billingPeriodLabel = o.optNullableString("billingPeriodLabel"),
+                    issuedAt = o.getLong("issuedAt"),
+                    sender = o.optString("sender", "UNKNOWN"),
+                    rawMessage = o.optString("rawMessage", ""),
+                    noticeHash = o.getString("noticeHash"),
+                    cycleKey = o.getString("cycleKey")
                 )
             }
         )

@@ -1,5 +1,7 @@
 package com.arthvault.ui.format
 
+import androidx.compose.runtime.Composable
+import com.arthvault.ui.components.LocalPrivacyMasking
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.time.Instant
@@ -62,16 +64,16 @@ private fun formatIndian(amount: Double, decimals: Int): String {
 }
 
 /** Aggregates. Paise on a five-figure total is noise, not precision. */
-fun formatMoney(amount: Double): String =
-    (if (amount < 0) "−₹" else "₹") + formatIndian(amount, 0)
+fun formatMoney(amount: Double, isMasked: Boolean = false): String =
+    if (isMasked) "₹ • • • •" else (if (amount < 0) "−₹" else "₹") + formatIndian(amount, 0)
 
 /** Individual transactions, where the paise are the user's own and worth showing. */
-fun formatMoneyPrecise(amount: Double): String =
-    (if (amount < 0) "−₹" else "₹") + formatIndian(amount, 2)
+fun formatMoneyPrecise(amount: Double, isMasked: Boolean = false): String =
+    if (isMasked) "₹ • • • •" else (if (amount < 0) "−₹" else "₹") + formatIndian(amount, 2)
 
 /** Signed, for deltas and net figures where the direction is the message. */
-fun formatSignedMoney(amount: Double): String =
-    (if (amount < 0) "−₹" else "+₹") + formatIndian(amount, 0)
+fun formatSignedMoney(amount: Double, isMasked: Boolean = false): String =
+    if (isMasked) "₹ • • • •" else (if (amount < 0) "−₹" else "+₹") + formatIndian(amount, 0)
 
 /**
  * A ledger amount with its direction on the front.
@@ -79,11 +81,9 @@ fun formatSignedMoney(amount: Double): String =
  * A true minus sign (U+2212), not a hyphen: it sits on the same optical axis as the
  * plus and matches the digit weight, which a hyphen does not.
  */
-fun formatDirectedMoney(amount: Double, isCredit: Boolean): String =
-    // abs, because the direction is carried by the flag: ledger rows store a
-    // positive amount alongside a DEBIT/CREDIT column, and a stray negative here
-    // would otherwise render two minus signs.
-    (if (isCredit) "+" else "−") + formatMoneyPrecise(abs(amount))
+fun formatDirectedMoney(amount: Double, isCredit: Boolean, isMasked: Boolean = false): String =
+    if (isMasked) (if (isCredit) "+₹ • • • •" else "−₹ • • • •")
+    else (if (isCredit) "+" else "−") + formatMoneyPrecise(abs(amount), isMasked)
 
 /** Whole numbers that are not money — transaction counts, message counts. */
 fun formatCount(value: Double): String = formatIndian(value, 0)

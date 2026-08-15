@@ -188,16 +188,17 @@ private fun CashFigures(
     val semantics = VaultTheme.semantics
     val stacked = LocalDensity.current.fontScale > 1.3f
 
+    val isMasked = com.arthvault.ui.components.LocalPrivacyMasking.current
     val income = @Composable { modifier: Modifier ->
-        MoneyColumn("INCOME", formatMoney(summary.income), semantics.positive,
+        MoneyColumn("INCOME", formatMoney(summary.income, isMasked), semantics.positive,
             modifier.clickable(onClickLabel = "Show income transactions") { onShowIncome() })
     }
     val spent = @Composable { modifier: Modifier ->
-        MoneyColumn("SPENT", formatMoney(summary.spent), semantics.negative,
+        MoneyColumn("SPENT", formatMoney(summary.spent, isMasked), semantics.negative,
             modifier.clickable(onClickLabel = "Show spending transactions") { onShowSpend() })
     }
     val net = @Composable { modifier: Modifier ->
-        MoneyColumn("NET", formatSignedMoney(summary.net), semantics.forAmount(summary.net), modifier)
+        MoneyColumn("NET", formatSignedMoney(summary.net, isMasked), semantics.forAmount(summary.net), modifier)
     }
 
     if (stacked) {
@@ -371,31 +372,31 @@ private fun ForecastSection(forecast: MonthEndForecast) {
         }
 
         Spacer(modifier = Modifier.height(Spacing.snug))
-
+        val isMasked = com.arthvault.ui.components.LocalPrivacyMasking.current
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(
-                    MaterialTheme.colorScheme.surfaceContainerHigh,
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                     shape = MaterialTheme.shapes.small
                 )
                 .padding(Spacing.snug),
             horizontalArrangement = Arrangement.spacedBy(Spacing.tight)
         ) {
-            ForecastStat("ON COURSE TO SPEND", formatMoney(forecast.projectedSpentMonthEnd), Modifier.weight(1f))
+            ForecastStat("ON COURSE TO SPEND", formatMoney(forecast.projectedSpentMonthEnd, isMasked), Modifier.weight(1f))
             ForecastStat(
                 label = "MONTH-END NET",
-                value = formatSignedMoney(forecast.projectedNetMonthEnd),
+                value = formatSignedMoney(forecast.projectedNetMonthEnd, isMasked),
                 modifier = Modifier.weight(1f),
                 tint = semantics.forAmount(forecast.projectedNetMonthEnd)
             )
-            ForecastStat("PER DAY SO FAR", formatMoney(forecast.dailySpendVelocity), Modifier.weight(1f))
+            ForecastStat("PER DAY SO FAR", formatMoney(forecast.dailySpendVelocity, isMasked), Modifier.weight(1f))
         }
 
         if (forecast.expectedIncomeRemaining > 0) {
             Spacer(modifier = Modifier.height(Spacing.tight))
             Text(
-                text = "Includes ${formatMoney(forecast.expectedIncomeRemaining)} of " +
+                text = "Includes ${formatMoney(forecast.expectedIncomeRemaining, isMasked)} of " +
                     "recurring income not yet received this month.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant

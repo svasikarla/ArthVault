@@ -228,4 +228,58 @@ class SmsParserEngineTest {
             txn!!.txnType != TxnType.EMI
         )
     }
+
+    @Test
+    fun `isGenericOrUnsafeMerchant identifies broad and blank patterns`() {
+        assertTrue(SmsParserEngine.isGenericOrUnsafeMerchant("UNKNOWN MERCHANT"))
+        assertTrue(SmsParserEngine.isGenericOrUnsafeMerchant("UNKNOWN"))
+        assertTrue(SmsParserEngine.isGenericOrUnsafeMerchant("UPI"))
+        assertTrue(SmsParserEngine.isGenericOrUnsafeMerchant("PAY"))
+        assertTrue(SmsParserEngine.isGenericOrUnsafeMerchant(""))
+        assertTrue(SmsParserEngine.isGenericOrUnsafeMerchant("  "))
+        assertTrue(!SmsParserEngine.isGenericOrUnsafeMerchant("SWIGGY"))
+        assertTrue(!SmsParserEngine.isGenericOrUnsafeMerchant("AMAZON"))
+    }
+
+    @Test
+    fun `determineCategory prioritizes specific long rules over generic rules`() {
+        val customRules = listOf(
+            MerchantRuleEntity("AMAZON", "Shopping"),
+            MerchantRuleEntity("AMAZON PAY", "Utilities & Bills")
+        )
+        val cat = engine.determineCategory("AMAZON PAY INDIA", customRules)
+        assertEquals("Utilities & Bills", cat)
+    }
+
+    @Test
+    fun `determineCategory prevents short word collisions`() {
+        val customRules = listOf(
+            MerchantRuleEntity("STAR", "Shopping"),
+            MerchantRuleEntity("HOTSTAR", "Entertainment & Subs")
+        )
+        // HOTSTAR should match "HOTSTAR" rule (length 7), NOT "STAR" rule (length 4)
+        val cat = engine.determineCategory("HOTSTAR", customRules)
+        assertEquals("Entertainment & Subs", cat)
+    }
+
+    @Test
+    fun `ICICI card spend with using preposition resolves FLIPKART INTERN merchant and Shopping category`() {
+        val body = "INR 281.00 spent using ICICI Bank Card XX6013 on 08-Aug-26 on FLIPKART INTERN. Avl Limit: INR 2,53,859.67. If not you, call 1800 2662/SMS BLOCK 6013 to 9215676766."
+        val result = engine.parseMessage("AD-ICICIB", body, 1_700_000_000_000L, emptyList(), BundledParserRules.entities)
+        val txn = result.parsedTransaction
+        assertNotNull("ICICI Bank Card SMS should parse successfully", txn)
+        assertEquals("FLIPKART INTERN", txn!!.merchant)
+        assertEquals("Shopping", txn.category)
+        assertEquals("6013", txn.accountTail)
+        assertEquals(281.0, txn.amount, 0.001)
+    }
+
+    @Test
+    fun `isBankNameOnly detects bank names and allows credit card labels`() {
+        assertTrue(SmsParserEngine.isBankNameOnly("ICICI Bank"))
+        assertTrue(SmsParserEngine.isBankNameOnly("HDFC Bank"))
+        assertTrue(SmsParserEngine.isBankNameOnly("using ICICI Bank"))
+        assertTrue(!SmsParserEngine.isBankNameOnly("FLIPKART INTERN"))
+        assertTrue(!SmsParserEngine.isBankNameOnly("ICICI Bank Credit"))
+    }
 }

@@ -1,5 +1,6 @@
 package com.arthvault.data.parser
 
+import com.arthvault.data.local.entity.BillNoticeEntity
 import com.arthvault.data.local.entity.MerchantRuleEntity
 import com.arthvault.data.local.entity.ParserRuleEntity
 import com.arthvault.data.local.entity.STATUS_FAILED
@@ -11,14 +12,62 @@ import java.security.MessageDigest
 import java.util.Locale
 import java.util.regex.Pattern
 
+/**
+ * Three arms, and at most one of them is ever populated.
+ *
+ * [billNotice] is the newest and is *not* a weaker kind of transaction. A due reminder
+ * still yields `parsedTransaction = null`, exactly as it did when the message was
+ * dropped outright — money owed is not money moved, and the guard that keeps the two
+ * apart is what stopped a card statement being booked as ₹2,783 of spend under one
+ * wording and ₹2,783 of income under another.
+ */
 data class ParseResult(
     val parsedTransaction: TransactionEntity? = null,
-    val unparsedSms: UnparsedSmsEntity? = null
+    val unparsedSms: UnparsedSmsEntity? = null,
+    val billNotice: BillNoticeEntity? = null
 )
 
 class SmsParserEngine {
 
     companion object {
+        val GENERIC_MERCHANTS = setOf(
+            "UNKNOWN MERCHANT", "UNKNOWN", "UPI", "PAYMENT", "PAY", "TRANSFER",
+            "DEBIT", "CREDIT", "BANK", "OTHER", "N/A", "NA", "NULL"
+        )
+
+        val KNOWN_BANK_NAMES = setOf(
+            "ICICI BANK", "HDFC BANK", "AXIS BANK", "SBI", "STATE BANK OF INDIA",
+            "KOTAK BANK", "KOTAK MAHINDRA BANK", "YES BANK", "INDUSIND BANK",
+            "PNB", "PUNJAB NATIONAL BANK", "BOB", "BANK OF BARODA", "CANARA BANK",
+            "IDFC FIRST BANK", "HSBC", "CITIBANK", "STANDARD CHARTERED", "ICICI", "HDFC",
+            "CARD", "CREDIT CARD", "DEBIT CARD", "BANK"
+        )
+
+        fun isGenericOrUnsafeMerchant(merchant: String): Boolean {
+            val upper = merchant.trim().uppercase(Locale.ROOT)
+            return upper.isBlank() || upper.length < 3 || upper in GENERIC_MERCHANTS
+        }
+
+        /**
+         * True when the string names the issuer rather than the payee.
+         *
+         * "using ICICI Bank" arrives here because the `amount-verb-payee` rule captures
+         * the whole "spent **using ICICI Bank Card XX6013**" clause, and stripping the
+         * card reference leaves the preposition attached to the bank.
+         */
+        fun isBankNameOnly(merchant: String): Boolean {
+            val upper = merchant.trim().uppercase(Locale.ROOT)
+            val withoutPreposition = upper.removePrefix("USING ").removePrefix("WITH ").trim()
+            return upper in KNOWN_BANK_NAMES || withoutPreposition in KNOWN_BANK_NAMES
+        }
+
+        /**
+         * True when a merchant string must never be generalised into a stored rule or
+         * matched against message bodies — it identifies a bank, a payment rail or
+         * nothing at all, so any pattern built from it sweeps up unrelated spend.
+         */
+        fun isUnsafeAsRulePattern(merchant: String): Boolean =
+            isGenericOrUnsafeMerchant(merchant) || isBankNameOnly(merchant)
 
 
         /** F1.3 — closing/available balance, when the bank quotes one. */
@@ -95,17 +144,32 @@ class SmsParserEngine {
         )
 
         /**
-         * Messages that quote money but describe no transaction.
+         * A credential, never a transaction and never a bill.
          *
-         * An OTP for a pending payment and a pre-approved-loan advert both name an
-         * amount, and both matched the ordinary patterns: "OTP for txn of Rs.5000.00
-         * at AMAZON is 483920" was booked as a ₹5,000 purchase, and a loan advert as
-         * a ₹15,00,000 one. Neither is a settled event, and neither belongs in the
-         * unparsed review queue either — there is nothing to review.
+         * "OTP for txn of Rs.5000.00 at AMAZON is 483920" was booked as a ₹5,000
+         * purchase. These words are unambiguous — no genuine statement or payment alert
+         * describes itself as a one-time password — so this is tested before anything
+         * else and its verdict is final.
          */
-        private val NON_TRANSACTIONAL = Regex(
-            "(?i)\\b(?:otp|one[\\s-]?time\\s+password|verification\\s+code|passcode|" +
-                "pre-?approved|apply\\s+now|click\\s+(?:here|to)|offer\\s+valid|know\\s+more)\\b"
+        private val OTP_MARKER = Regex(
+            "(?i)\\b(?:otp|one[\\s-]?time\\s+password|verification\\s+code|passcode)\\b"
+        )
+
+        /**
+         * Marketing. Also not a transaction — a pre-approved-loan advert was booked as
+         * ₹15,00,000 of spend — but unlike [OTP_MARKER] these words are *not* exclusive
+         * to marketing, which is why the order of the two checks matters.
+         *
+         * Utility and telecom billers routinely append a payment link to a genuine due
+         * notice: "Your electricity bill of Rs 1,240 is due on 15-Aug. Click here to
+         * pay." Tested before the due-reminder check, that message is discarded for
+         * containing "click to" and the bill is lost. Tested after, the advert is still
+         * discarded — a promotion that quotes no amount due and no deadline does not
+         * satisfy the due-reminder pattern, so it never reaches here as a bill.
+         */
+        private val PROMO_MARKER = Regex(
+            "(?i)\\b(?:pre-?approved|apply\\s+now|click\\s+(?:here|to)|offer\\s+valid|" +
+                "know\\s+more)\\b"
         )
 
         /**
@@ -185,21 +249,30 @@ class SmsParserEngine {
     ): ParseResult {
         val cleanBody = body.replace("\n", " ").trim()
 
-        // Before anything else: an OTP or an advert quotes an amount but records no
-        // event. Both matched the ordinary patterns and both entered the ledger as
-        // real spend. Returning an empty result rather than an unparsed entry is
-        // deliberate — T2.3 exists so genuine transactions are never dropped, and a
-        // marketing SMS in the review queue is noise that trains the user to ignore it.
-        if (NON_TRANSACTIONAL.containsMatchIn(cleanBody)) return ParseResult()
+        // Before anything else: an OTP quotes an amount but records no event, and
+        // nothing else is worded like one. Returning an empty result rather than an
+        // unparsed entry is deliberate — T2.3 exists so genuine transactions are never
+        // dropped, and a credential SMS in the review queue is noise that trains the
+        // user to ignore it.
+        if (OTP_MARKER.containsMatchIn(cleanBody)) return ParseResult()
 
         // A bill that is owed is not a bill that was paid. Checked before the rules so
         // the amount never reaches them, and after the settlement test so a payment
         // confirmation that restates the outstanding balance still parses.
+        //
+        // It also sits ahead of the marketing check, because a biller that attaches
+        // "click here to pay" to a real due notice would otherwise have that notice
+        // thrown away for the sake of its own payment link.
         if (DUE_REMINDER.containsMatchIn(cleanBody) &&
             !SETTLED_PAYMENT.containsMatchIn(cleanBody)
         ) {
-            return ParseResult()
+            return ParseResult(
+                billNotice = BillNoticeExtractor.extract(sender, body, cleanBody, timestamp)
+            )
         }
+
+        // An advert quoting a large round number was being booked as spend.
+        if (PROMO_MARKER.containsMatchIn(cleanBody)) return ParseResult()
 
         val hash = generateHash(sender, cleanBody, timestamp)
         val status = if (NEGATED.containsMatchIn(cleanBody)) STATUS_FAILED else STATUS_POSTED
@@ -369,10 +442,27 @@ class SmsParserEngine {
         }
 
         val cleaned = cleanMerchantName(trimmed).takeUnless { it == UNKNOWN_MERCHANT }
+        if (cleaned != null && !isBankNameOnly(cleaned)) return Payee(cleaned, isAccountTransfer = false)
+
+        val extracted = extractPayeeFromBody(body)
+        if (extracted != null) return Payee(extracted, isAccountTransfer = false)
         if (cleaned != null) return Payee(cleaned, isAccountTransfer = false)
 
         val counterparty = counterpartyMerchant(body, direction, accountTail)
         return Payee(counterparty ?: UNKNOWN_MERCHANT, isAccountTransfer = counterparty != null)
+    }
+
+    private fun extractPayeeFromBody(body: String): String? {
+        val regex = Regex(
+            "(?i)\\b(?:a/c|ac|acct|account|card)\\s*(?:no\\.?)?\\s*(?:xx+|x|\\*+)?\\d{3,6}\\s*(?:on\\s+\\d{1,2}[-/][A-Za-z0-9]{2,}(?:[-/]\\d{2,4})?)?\\s+(?:to|at|for|towards|via|from|on)\\s+([A-Za-z0-9.@_&'/-][A-Za-z0-9\\s.@_&'/-]*?)(?=\\s+on\\b|\\s+ref\\b|\\s+bal\\b|\\s+avl\\b|\\s+limit\\b|\\s+avail\\b|\\s+via\\b|\\s+using\\b|[.,]|$|\\n)"
+        )
+        regex.find(body)?.let { match ->
+            val candidate = cleanMerchantName(match.groupValues[1])
+            if (candidate != UNKNOWN_MERCHANT && !isBankNameOnly(candidate)) {
+                return candidate
+            }
+        }
+        return null
     }
 
     private fun transferLabel(direction: String, tail: String): String =
@@ -511,8 +601,8 @@ class SmsParserEngine {
             ""
         )
 
-        // A leading preposition the capture group carried in, e.g. "from FLIPKART".
-        clean = clean.replace(Regex("(?i)^\\s*(?:from|to|at|for|by|via)\\s+"), "")
+        // A leading preposition the capture group carried in, e.g. "from FLIPKART" or "using FLIPKART".
+        clean = clean.replace(Regex("(?i)^\\s*(?:from|to|at|for|by|via|using|with|on)\\s+"), "")
 
         // A trailing reason clause, e.g. "FLIPKART for order cancellation".
         clean = clean.replace(
@@ -558,8 +648,24 @@ class SmsParserEngine {
 
     fun determineCategory(merchant: String, rules: List<MerchantRuleEntity>): String {
         val upperMerchant = merchant.uppercase(Locale.ROOT)
-        for (rule in rules) {
-            if (upperMerchant.contains(rule.merchantPattern.uppercase(Locale.ROOT))) {
+        // Sort rules by pattern length descending so specific rules (e.g. "AMAZON PAY")
+        // take precedence over generic rules (e.g. "AMAZON")
+        val sortedRules = rules.sortedByDescending { it.merchantPattern.length }
+        for (rule in sortedRules) {
+            val patternUpper = rule.merchantPattern.uppercase(Locale.ROOT)
+            if (patternUpper.isBlank()) continue
+
+            val isMatch = if (patternUpper.length <= 4 || isGenericOrUnsafeMerchant(patternUpper)) {
+                upperMerchant == patternUpper
+            } else {
+                try {
+                    val regex = Regex("\\b" + Regex.escape(patternUpper) + "\\b", RegexOption.IGNORE_CASE)
+                    regex.containsMatchIn(upperMerchant)
+                } catch (_: Exception) {
+                    upperMerchant.contains(patternUpper)
+                }
+            }
+            if (isMatch) {
                 return rule.assignedCategory
             }
         }
@@ -569,7 +675,7 @@ class SmsParserEngine {
             upperMerchant.contains("AMAZON") || upperMerchant.contains("FLIPKART") || upperMerchant.contains("MYNTRA") || upperMerchant.contains("STORE") -> "Shopping"
             upperMerchant.contains("BLINKIT") || upperMerchant.contains("ZEPTO") || upperMerchant.contains("GROCER") || upperMerchant.contains("MART") -> "Grocery"
             upperMerchant.contains("UBER") || upperMerchant.contains("OLA") || upperMerchant.contains("PETROL") || upperMerchant.contains("FUEL") || upperMerchant.contains("SHELL") -> "Transport & Fuel"
-            upperMerchant.contains("NETFLIX") || upperMerchant.contains("SPOTIFY") || upperMerchant.contains("APPLE") || upperMerchant.contains("PRIME") -> "Entertainment & Subs"
+            upperMerchant.contains("NETFLIX") || upperMerchant.contains("SPOTIFY") || upperMerchant.contains("APPLE") || upperMerchant.contains("PRIME") || upperMerchant.contains("HOTSTAR") -> "Entertainment & Subs"
             upperMerchant.contains("ATM") || upperMerchant.contains("CASH") -> "ATM Cash"
             upperMerchant.contains("ELECTRIC") || upperMerchant.contains("BESCOM") || upperMerchant.contains("AIRTEL") || upperMerchant.contains("JIO") || upperMerchant.contains("BILL") -> "Utilities & Bills"
             else -> UNCATEGORISED

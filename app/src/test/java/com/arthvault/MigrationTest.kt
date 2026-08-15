@@ -161,6 +161,58 @@ class MigrationTest {
         }
     }
 
+    // ---- v5 -> v6 --------------------------------------------------------
+
+    @Test
+    fun `v5 to v6 adds bill_notices empty, leaving the ledger alone`() {
+        createSchemaVersion(5).use { db ->
+            db.execSQL(
+                "INSERT INTO transactions (id, amount, direction, timestamp, sender, merchant, " +
+                    "accountTail, channel, category, rawMessage, balanceAfter, status, txnType, " +
+                    "hash, txnHash) VALUES (1, 2783.0, 'DEBIT', 1754700000000, 'AD-ICICIB-S', " +
+                    "'SWIGGY', '7009', 'UPI', 'Food & Dining', 'raw', NULL, " +
+                    "'POSTED', 'PURCHASE', 'h1', 't1')"
+            )
+        }
+
+        val db = migrateToLatest()
+
+        // Empty on arrival, for the same reason own_accounts was: notices are captured
+        // going forward. Re-parsing the whole inbox inside a migration would put an
+        // unbounded read on the unlock path, and the rescan button already does it on
+        // the user's terms.
+        db.query("SELECT COUNT(*) FROM bill_notices").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(0, cursor.getInt(0))
+        }
+        db.query("SELECT COUNT(*) FROM transactions").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals("v6 is additive; the ledger is not touched", 1, cursor.getInt(0))
+        }
+    }
+
+    @Test
+    fun `the noticeHash index is unique, so a re-sent reminder cannot double up`() {
+        createSchemaVersion(5).use { }
+        val db = migrateToLatest()
+
+        // A biller sends the same reminder three or four times a cycle. Without the
+        // unique index the IGNORE conflict strategy never fires and the Bills tab
+        // shows one obligation four times.
+        val insert = "INSERT OR IGNORE INTO bill_notices (billerKey, billerLabel, kind, " +
+            "accountTail, amountDue, minAmountDue, dueDate, billingPeriodLabel, issuedAt, " +
+            "sender, rawMessage, noticeHash, cycleKey) VALUES ('ICICIBANKCREDITCARD', " +
+            "'ICICI Bank Credit Card', 'CARD', '7009', 2783.0, 140.0, 1754438400000, NULL, " +
+            "1754000000000, 'AD-ICICIB-S', 'raw', 'same-hash', 'cycle-1')"
+        db.execSQL(insert)
+        db.execSQL(insert)
+
+        db.query("SELECT COUNT(*) FROM bill_notices").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(1, cursor.getInt(0))
+        }
+    }
+
     @Test
     fun `the unique ruleId index survives the migration`() {
         createSchemaVersion(3).use { }
@@ -438,7 +490,7 @@ class MigrationTest {
      * Opens the database through Room at the current version, running whichever
      * migrations the starting version requires.
      *
-     * All three are registered rather than just the one under test, because that
+     * All of them are registered rather than just the one under test, because that
      * is the set the shipped app registers. Registering only `MIGRATION_3_4` would
      * make a v2 database fail here for a reason that has nothing to do with the
      * migration being tested.
@@ -450,7 +502,8 @@ class MigrationTest {
                 AppDatabase.MIGRATION_1_2,
                 AppDatabase.MIGRATION_2_3,
                 AppDatabase.MIGRATION_3_4,
-                AppDatabase.MIGRATION_4_5
+                AppDatabase.MIGRATION_4_5,
+                AppDatabase.MIGRATION_5_6
             )
             .build()
         return room.openHelper.writableDatabase

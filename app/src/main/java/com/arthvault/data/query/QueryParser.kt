@@ -50,6 +50,31 @@ class QueryParser(
         )
     }
 
+    /**
+     * Generates relevant auto-complete query suggestions based on partial user input.
+     */
+    fun getSuggestions(input: String): List<String> {
+        val clean = input.lowercase(Locale.ROOT).trim()
+        if (clean.isBlank()) return emptyList()
+
+        val suggestions = mutableListOf<String>()
+
+        if (!clean.startsWith("spend") && !clean.startsWith("how")) {
+            suggestions.add("spend on $clean")
+            suggestions.add("biggest spend on $clean")
+        }
+
+        for (cat in knownCategories) {
+            val lowerCat = cat.lowercase(Locale.ROOT)
+            if (lowerCat.contains(clean) || clean.contains(lowerCat)) {
+                suggestions.add("spend on $lowerCat this month")
+                suggestions.add("biggest spend on $lowerCat")
+            }
+        }
+
+        return suggestions.distinct().take(4)
+    }
+
     private fun detectMetric(text: String): QueryMetric = when {
         "how many" in text || "how often" in text || "number of" in text ||
             "count" in text -> QueryMetric.COUNT

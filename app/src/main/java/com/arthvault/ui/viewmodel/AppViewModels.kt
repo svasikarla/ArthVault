@@ -4,10 +4,12 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.arthvault.data.analytics.BillObligation
 import com.arthvault.data.analytics.PeriodScope
 import com.arthvault.data.local.entity.AdjustmentEntity
 import com.arthvault.data.local.AddCategoryOutcome
 import com.arthvault.data.local.DeleteCategoryOutcome
+import com.arthvault.data.local.entity.BillNoticeEntity
 import com.arthvault.data.local.entity.CategoryEntity
 import com.arthvault.data.local.entity.OwnAccountEntity
 import com.arthvault.data.local.entity.ParserRuleEntity
@@ -19,6 +21,7 @@ import com.arthvault.data.parser.rules.RuleLoadResult
 import com.arthvault.data.query.QueryResult
 import com.arthvault.data.repository.AnalyticsResult
 import com.arthvault.data.repository.BackupResult
+import com.arthvault.data.repository.BillInsights
 import com.arthvault.data.repository.ImportResult
 import com.arthvault.data.repository.RestoreResult
 import com.arthvault.data.repository.SmsRepository
@@ -83,6 +86,36 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun previewBulkRecategorization(
+        merchant: String,
+        newCategory: String,
+        rawMessage: String? = null,
+        sender: String = com.arthvault.data.repository.SmsRepository.UNKNOWN_SENDER,
+        onResult: (com.arthvault.data.repository.BulkRecategorizePreview) -> Unit
+    ) {
+        viewModelScope.launch {
+            val preview =
+                repository.previewBulkRecategorization(merchant, newCategory, rawMessage, sender)
+            onResult(preview)
+        }
+    }
+
+    fun updateSelectedTransactionCategories(
+        selectedTransactionIds: Set<Long>,
+        newCategory: String,
+        merchantPattern: String,
+        saveGlobalRule: Boolean
+    ) {
+        viewModelScope.launch {
+            repository.updateSelectedTransactionCategories(
+                selectedTransactionIds,
+                newCategory,
+                merchantPattern,
+                saveGlobalRule
+            )
+        }
+    }
+
     /**
      * Creates one of the user's own categories.
      *
@@ -108,11 +141,25 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    /** Manual "scan now" — re-reads the whole inbox, not just past the watermark. */
-    fun scanInbox(onResult: ((com.arthvault.data.repository.ScanResult) -> Unit)? = null) {
+    /**
+     * Manual "scan now" — re-reads the whole inbox, not just past the watermark, and
+     * then re-parses what is already stored.
+     *
+     * Both halves are needed and neither substitutes for the other. Ingestion
+     * de-duplicates on a hash of sender, body and minute, which is independent of the
+     * parser, so a rescan alone finds every known message already present and leaves
+     * rows parsed by an older ruleset exactly as they were.
+     */
+    fun scanInbox(
+        onResult: ((
+            com.arthvault.data.repository.ScanResult,
+            com.arthvault.data.repository.ReparseResult
+        ) -> Unit)? = null
+    ) {
         viewModelScope.launch {
             val result = repository.rescanEntireInbox()
-            onResult?.invoke(result)
+            val reparse = repository.reparseStoredTransactions()
+            onResult?.invoke(result, reparse)
         }
     }
 
@@ -277,6 +324,70 @@ class AnalyticsViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun clearSourceTransactions() {
         _tappedThrough.value = emptyList()
+    }
+}
+
+/**
+ * Phase 9 — bills that are owed, kept apart from money that moved.
+ *
+ * A separate ViewModel rather than more state on [AnalyticsViewModel], mirroring the
+ * separation in the repository: the two screens answer different questions and nothing
+ * should make it easy to add an obligation total to a spending total.
+ */
+class BillsViewModel(application: Application) : AndroidViewModel(application) {
+    private val repository = SmsRepository(application)
+
+    private val _insights = MutableStateFlow(BillInsights())
+    val insights: StateFlow<BillInsights> = _insights.asStateFlow()
+
+    private val _isLoading = MutableStateFlow(false)
+    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+
+    // No init-block refresh, for the reason AnalyticsViewModel records: this is
+    // constructed the moment the vault unlocks, whichever screen the user is on.
+
+    fun refresh() {
+        viewModelScope.launch {
+            _isLoading.value = true
+            try {
+                _insights.value = repository.computeBillInsights()
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    // --- F4.4 tap-through ---
+    //
+    // A bill row opens two different things: the reminders the biller sent, and
+    // whatever payment was matched against them. Keeping them in separate state means
+    // the sheet can show both and say which is which, rather than merging an SMS the
+    // bank sent with a transaction the app inferred.
+
+    private val _tappedNotices = MutableStateFlow<List<BillNoticeEntity>>(emptyList())
+    val tappedNotices: StateFlow<List<BillNoticeEntity>> = _tappedNotices.asStateFlow()
+
+    private val _tappedTransactions = MutableStateFlow<List<TransactionEntity>>(emptyList())
+    val tappedTransactions: StateFlow<List<TransactionEntity>> = _tappedTransactions.asStateFlow()
+
+    fun showSources(obligation: BillObligation) {
+        viewModelScope.launch {
+            _tappedNotices.value = repository.getBillNoticesByIds(obligation.noticeIds)
+            _tappedTransactions.value =
+                repository.getTransactionsByIds(obligation.matchedTransactionIds)
+        }
+    }
+
+    fun showSourceTransactions(ids: List<Long>) {
+        viewModelScope.launch {
+            _tappedNotices.value = emptyList()
+            _tappedTransactions.value = repository.getTransactionsByIds(ids)
+        }
+    }
+
+    fun clearSources() {
+        _tappedNotices.value = emptyList()
+        _tappedTransactions.value = emptyList()
     }
 }
 

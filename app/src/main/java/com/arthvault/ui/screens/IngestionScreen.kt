@@ -847,11 +847,16 @@ private fun ScanInboxAction(viewModel: LedgerViewModel) {
 
     val runScan = {
         snackbar.show("Scanning your SMS inbox…")
-        viewModel.scanInbox { res ->
+        viewModel.scanInbox { res, reparse ->
+            val corrected = reparse.merchantsCorrected + reparse.categoriesCorrected
             snackbar.show(
                 when {
+                    res.newTransactionsCount > 0 && corrected > 0 ->
+                        "Imported ${res.newTransactionsCount} new transactions and re-parsed $corrected existing ones"
                     res.newTransactionsCount > 0 ->
                         "Imported ${res.newTransactionsCount} new transactions from ${res.totalScanned} messages"
+                    corrected > 0 ->
+                        "Re-parsed $corrected existing transactions under the current rules"
                     res.totalScanned > 0 ->
                         "Scanned ${res.totalScanned} messages — everything already up to date"
                     else -> "No messages found in your inbox"

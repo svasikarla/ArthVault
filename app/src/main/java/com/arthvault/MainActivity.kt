@@ -17,10 +17,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Analytics
+import androidx.compose.material.icons.filled.EventNote
 import androidx.compose.material.icons.filled.Input
 import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.outlined.Analytics
+import androidx.compose.material.icons.outlined.EventNote
 import androidx.compose.material.icons.outlined.Input
 import androidx.compose.material.icons.outlined.ReceiptLong
 import androidx.compose.material.icons.outlined.Shield
@@ -54,6 +56,7 @@ import androidx.navigation.compose.rememberNavController
 import com.arthvault.ui.components.Motion
 import com.arthvault.ui.components.reduceMotion
 import com.arthvault.ui.screens.AnalyticsScreen
+import com.arthvault.ui.screens.BillsScreen
 import com.arthvault.ui.screens.IngestionScreen
 import com.arthvault.ui.screens.LedgerScreen
 import com.arthvault.ui.screens.LockScreen
@@ -63,6 +66,7 @@ import com.arthvault.ui.vault.SystemUiGuard
 import com.arthvault.ui.vault.VaultSessionViewModel
 import com.arthvault.ui.vault.VaultState
 import com.arthvault.ui.viewmodel.AnalyticsViewModel
+import com.arthvault.ui.viewmodel.BillsViewModel
 import com.arthvault.ui.viewmodel.LedgerViewModel
 import com.arthvault.ui.viewmodel.VaultViewModel
 
@@ -82,6 +86,12 @@ sealed class Screen(
 ) {
     object Ledger : Screen("ledger", "Ledger", Icons.Outlined.ReceiptLong, Icons.Filled.ReceiptLong)
     object Analytics : Screen("analytics", "Analytics", Icons.Outlined.Analytics, Icons.Filled.Analytics)
+
+    /**
+     * Phase 9. Five destinations is Material 3's maximum for a bottom bar, so this is
+     * the last one that fits — anything further has to displace something here.
+     */
+    object Bills : Screen("bills", "Bills", Icons.Outlined.EventNote, Icons.Filled.EventNote)
     object Ingestion : Screen("ingestion", "Rules", Icons.Outlined.Input, Icons.Filled.Input)
     object Vault : Screen("vault", "Vault", Icons.Outlined.Shield, Icons.Filled.Shield)
 }
@@ -243,82 +253,95 @@ fun VaultLedgerApp() {
     val navController = rememberNavController()
     val ledgerViewModel: LedgerViewModel = viewModel()
     val analyticsViewModel: AnalyticsViewModel = viewModel()
+    val billsViewModel: BillsViewModel = viewModel()
     val vaultViewModel: VaultViewModel = viewModel()
+    val isMasked = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
 
     val screens = listOf(
         Screen.Ledger,
         Screen.Analytics,
+        Screen.Bills,
         Screen.Ingestion,
         Screen.Vault
     )
 
-    Scaffold(
-        modifier = Modifier.fillMaxSize(),
-        bottomBar = {
-            NavigationBar {
-                val navBackStackEntry by navController.currentBackStackEntryAsState()
-                val currentRoute = navBackStackEntry?.destination?.route
+    CompositionLocalProvider(com.arthvault.ui.components.LocalPrivacyMasking provides isMasked.value) {
+        Scaffold(
+            modifier = Modifier.fillMaxSize(),
+            bottomBar = {
+                NavigationBar {
+                    val navBackStackEntry by navController.currentBackStackEntryAsState()
+                    val currentRoute = navBackStackEntry?.destination?.route
 
-                screens.forEach { screen ->
-                    val selected = currentRoute == screen.route
-                    NavigationBarItem(
-                        icon = {
-                            Icon(
-                                imageVector = if (selected) screen.selectedIcon else screen.icon,
-                                contentDescription = null,
-                            )
-                        },
-                        label = { Text(screen.title) },
-                        selected = selected,
-                        onClick = {
-                            if (currentRoute != screen.route) {
-                                navController.navigate(screen.route) {
-                                    popUpTo(navController.graph.findStartDestination().id) {
-                                        saveState = true
+                    screens.forEach { screen ->
+                        val selected = currentRoute == screen.route
+                        NavigationBarItem(
+                            icon = {
+                                Icon(
+                                    imageVector = if (selected) screen.selectedIcon else screen.icon,
+                                    contentDescription = null,
+                                )
+                            },
+                            label = { Text(screen.title) },
+                            selected = selected,
+                            onClick = {
+                                if (currentRoute != screen.route) {
+                                    navController.navigate(screen.route) {
+                                        popUpTo(navController.graph.findStartDestination().id) {
+                                            saveState = true
+                                        }
+                                        launchSingleTop = true
+                                        restoreState = true
                                     }
-                                    launchSingleTop = true
-                                    restoreState = true
                                 }
-                            }
-                        },
-                        modifier = Modifier.testTag("nav_item_${screen.route}")
-                    )
+                            },
+                            modifier = Modifier.testTag("nav_item_${screen.route}")
+                        )
+                    }
                 }
             }
-        }
-    ) { innerPadding ->
-        // Fade-through, the M3 transition for destinations that are peers rather than
-        // parent and child: the outgoing screen leaves quickly, the incoming one fades
-        // up from 94%. The four destinations used to hard-cut, which made every tab
-        // switch read as a separate app rather than a move within one.
-        //
-        // Zero-duration when the user has asked the system to stop animating. A
-        // transition they declined is one that costs them.
-        val reduced = reduceMotion()
-        val enterMillis = if (reduced) 0 else Motion.STANDARD
-        val exitMillis = if (reduced) 0 else Motion.QUICK
+        ) { innerPadding ->
+            val reduced = reduceMotion()
+            val enterMillis = if (reduced) 0 else Motion.STANDARD
+            val exitMillis = if (reduced) 0 else Motion.QUICK
 
-        NavHost(
-            navController = navController,
-            startDestination = Screen.Ledger.route,
-            enterTransition = {
-                fadeIn(tween(enterMillis)) +
-                    scaleIn(initialScale = 0.94f, animationSpec = tween(enterMillis))
-            },
-            exitTransition = { fadeOut(tween(exitMillis)) },
-            modifier = Modifier.padding(innerPadding)
-        ) {
-            composable(Screen.Ledger.route) {
-                LedgerScreen(viewModel = ledgerViewModel)
-            }
-            composable(Screen.Analytics.route) {
-                AnalyticsScreen(viewModel = analyticsViewModel)
-            }
-            composable(Screen.Ingestion.route) {
-                IngestionScreen(ledgerViewModel = ledgerViewModel, vaultViewModel = vaultViewModel)
-            }
-            composable(Screen.Vault.route) {
-                VaultScreen(viewModel = vaultViewModel)
+            NavHost(
+                navController = navController,
+                startDestination = Screen.Ledger.route,
+                enterTransition = {
+                    fadeIn(tween(enterMillis)) +
+                        scaleIn(initialScale = 0.94f, animationSpec = tween(enterMillis))
+                },
+                exitTransition = { fadeOut(tween(exitMillis)) },
+                modifier = Modifier.padding(innerPadding)
+            ) {
+                composable(Screen.Ledger.route) {
+                    LedgerScreen(
+                        viewModel = ledgerViewModel,
+                        isMasked = isMasked.value,
+                        onToggleMask = { isMasked.value = !isMasked.value }
+                    )
+                }
+                composable(Screen.Analytics.route) {
+                    AnalyticsScreen(
+                        viewModel = analyticsViewModel,
+                        isMasked = isMasked.value,
+                        onToggleMask = { isMasked.value = !isMasked.value }
+                    )
+                }
+                composable(Screen.Bills.route) {
+                    BillsScreen(
+                        viewModel = billsViewModel,
+                        isMasked = isMasked.value,
+                        onToggleMask = { isMasked.value = !isMasked.value }
+                    )
+                }
+                composable(Screen.Ingestion.route) {
+                    IngestionScreen(ledgerViewModel = ledgerViewModel, vaultViewModel = vaultViewModel)
+                }
+                composable(Screen.Vault.route) {
+                    VaultScreen(viewModel = vaultViewModel)
+                }
             }
         }
     }

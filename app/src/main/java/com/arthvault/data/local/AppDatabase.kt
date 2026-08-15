@@ -10,6 +10,7 @@ import com.arthvault.data.crypto.EncryptionMigrator
 import com.arthvault.data.crypto.VaultCrypto
 import com.arthvault.data.local.dao.AdjustmentDao
 import com.arthvault.data.local.dao.AppSettingDao
+import com.arthvault.data.local.dao.BillNoticeDao
 import com.arthvault.data.local.dao.CategoryDao
 import com.arthvault.data.local.dao.MerchantRuleDao
 import com.arthvault.data.local.dao.OwnAccountDao
@@ -21,6 +22,7 @@ import com.arthvault.data.local.entity.AdjustmentEntity
 import com.arthvault.data.local.entity.AdjustmentField
 import com.arthvault.data.local.entity.AdjustmentSource
 import com.arthvault.data.local.entity.AppSettingEntity
+import com.arthvault.data.local.entity.BillNoticeEntity
 import com.arthvault.data.local.entity.CategoryEntity
 import com.arthvault.data.local.entity.MerchantRuleEntity
 import com.arthvault.data.local.entity.OwnAccountEntity
@@ -44,9 +46,10 @@ import java.io.File
         SenderAllowlistEntity::class,
         AdjustmentEntity::class,
         AppSettingEntity::class,
-        OwnAccountEntity::class
+        OwnAccountEntity::class,
+        BillNoticeEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -60,6 +63,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun adjustmentDao(): AdjustmentDao
     abstract fun appSettingDao(): AppSettingDao
     abstract fun ownAccountDao(): OwnAccountDao
+    abstract fun billNoticeDao(): BillNoticeDao
 
     companion object {
         const val DATABASE_NAME = "vault_ledger.db"
@@ -274,6 +278,54 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Phase 9 — bills that are *owed* get somewhere to live.
+         *
+         * Additive, like [MIGRATION_4_5], and for the same reason: an upgrading install
+         * arrives with an empty table and every figure it already had stays exactly as
+         * it was. Notices are captured going forward, and a user who wants their history
+         * back runs a full inbox rescan — the messages are still in the OS inbox, which
+         * is the whole premise of the deferred-ingestion design.
+         *
+         * The table is deliberately not populated by this migration. Re-parsing the
+         * inbox during a schema upgrade would put an unbounded content-provider read on
+         * the unlock path, and the rescan button already does the job on the user's
+         * terms rather than silently.
+         */
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS bill_notices (" +
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "billerKey TEXT NOT NULL, " +
+                        "billerLabel TEXT NOT NULL, " +
+                        "kind TEXT NOT NULL, " +
+                        "accountTail TEXT, " +
+                        "amountDue REAL, " +
+                        "minAmountDue REAL, " +
+                        "dueDate INTEGER, " +
+                        "billingPeriodLabel TEXT, " +
+                        "issuedAt INTEGER NOT NULL, " +
+                        "sender TEXT NOT NULL, " +
+                        "rawMessage TEXT NOT NULL, " +
+                        "noticeHash TEXT NOT NULL, " +
+                        "cycleKey TEXT NOT NULL)"
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS index_bill_notices_noticeHash " +
+                        "ON bill_notices (noticeHash)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_bill_notices_cycleKey " +
+                        "ON bill_notices (cycleKey)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_bill_notices_dueDate " +
+                        "ON bill_notices (dueDate)"
+                )
+            }
+        }
+
         /** True once [open] has succeeded; false before unlock and after [lock]. */
         val isOpen: Boolean get() = INSTANCE != null
 
@@ -317,7 +369,10 @@ abstract class AppDatabase : RoomDatabase() {
                     )
                         .openHelperFactory(SupportOpenHelperFactory(passphraseHex.copyOf()))
                         .addCallback(DatabaseCallback())
-                        .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                        .addMigrations(
+                            MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
+                            MIGRATION_5_6
+                        )
                         .build()
                 } finally {
                     VaultCrypto.wipe(passphraseHex)
@@ -326,6 +381,19 @@ abstract class AppDatabase : RoomDatabase() {
                 INSTANCE = instance
                 instance
             }
+        }
+
+        /**
+         * Installs a database directly, bypassing [open]. Tests only.
+         *
+         * The unlock gate is what stops any screen reaching the ledger before
+         * authentication, and it also puts [SmsRepository][com.arthvault.data.repository.SmsRepository]
+         * out of reach of a unit test, which has neither a Keystore nor a biometric
+         * prompt. Passing null clears it; the caller owns closing whatever it installed.
+         */
+        @androidx.annotation.VisibleForTesting
+        fun installForTest(database: AppDatabase?) {
+            synchronized(this) { INSTANCE = database }
         }
 
         /** Closes the ledger. The next screen has to authenticate again. */

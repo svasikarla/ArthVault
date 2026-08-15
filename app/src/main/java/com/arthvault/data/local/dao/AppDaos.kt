@@ -6,6 +6,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import com.arthvault.data.local.entity.AdjustmentEntity
 import com.arthvault.data.local.entity.AppSettingEntity
+import com.arthvault.data.local.entity.BillNoticeEntity
 import com.arthvault.data.local.entity.CategoryEntity
 import com.arthvault.data.local.entity.MerchantRuleEntity
 import com.arthvault.data.local.entity.OwnAccountEntity
@@ -49,6 +50,30 @@ interface TransactionDao {
     /** F5.2 only. An explicit, user-initiated erasure of everything. */
     @Query("DELETE FROM transactions")
     suspend fun deleteAllTransactions()
+}
+
+@Dao
+interface BillNoticeDao {
+    @Query("SELECT * FROM bill_notices ORDER BY issuedAt DESC")
+    fun getAll(): Flow<List<BillNoticeEntity>>
+
+    @Query("SELECT * FROM bill_notices ORDER BY issuedAt DESC")
+    suspend fun getAllList(): List<BillNoticeEntity>
+
+    /**
+     * IGNORE rather than REPLACE, and the unique index on `noticeHash` is what makes
+     * it fire. A biller re-sending the same reminder must not produce a second row,
+     * and REPLACE would churn the primary key on every re-send.
+     */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insert(notice: BillNoticeEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertAll(notices: List<BillNoticeEntity>)
+
+    /** F5.2 — a bill notice names an account and an amount owed. It is user data. */
+    @Query("DELETE FROM bill_notices")
+    suspend fun deleteAll()
 }
 
 @Dao
